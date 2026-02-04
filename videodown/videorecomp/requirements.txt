@@ -1,0 +1,16 @@
+# Video processing
+moviepy>=2.0.0
+ffmpeg-python>=0.2.0
+pillow>=10.0.0
+
+# Subtitle processing
+pysrt>=1.1.2
+chardet>=5.0.0
+
+# Utilities
+numpy>=1.26.0
+tqdm>=4.65.0
+pyyaml>=6.0
+
+# ZIP handling
+# (built-in zipfile module is used)

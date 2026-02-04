@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Project specific
+input/*
+output/*
+!input/.gitkeep
+!output/.gitkeep
+
+# Web application
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.cache/
+
+backend/uploads/*
+backend/downloads/*
+backend/tasks/*
+!uploads/.gitkeep
+!downloads/.gitkeep
+!tasks/.gitkeep
+backend/venv/
+
+# Temporary files
+*.tmp
+*.log
+videorecomp_*/
+
+# OS
+.DS_Store
+Thumbs.db

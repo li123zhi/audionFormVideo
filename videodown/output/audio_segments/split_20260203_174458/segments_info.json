@@ -1,0 +1,434 @@
+[
+  {
+    "index": 1,
+    "start": "00:00:00,699",
+    "end": "00:00:01,885",
+    "duration": 1.19,
+    "text": "Row! Row faster!",
+    "filename": "segment_001.mp3"
+  },
+  {
+    "index": 2,
+    "start": "00:00:01,885",
+    "end": "00:00:03,225",
+    "duration": 1.34,
+    "text": "If we can just get off this lake,",
+    "filename": "segment_002.mp3"
+  },
+  {
+    "index": 3,
+    "start": "00:00:03,225",
+    "end": "00:00:03,936",
+    "duration": 0.71,
+    "text": "we'll be safe.",
+    "filename": "segment_003.mp3"
+  },
+  {
+    "index": 4,
+    "start": "00:00:10,266",
+    "end": "00:00:10,681",
+    "duration": 0.41,
+    "text": "Ahhh!",
+    "filename": "segment_004.mp3"
+  },
+  {
+    "index": 5,
+    "start": "00:00:10,699",
+    "end": "00:00:11,931",
+    "duration": 1.23,
+    "text": "Miaomiao, look out!",
+    "filename": "segment_005.mp3"
+  },
+  {
+    "index": 6,
+    "start": "00:00:14,666",
+    "end": "00:00:16,109",
+    "duration": 1.44,
+    "text": "Quick, grab my hand!",
+    "filename": "segment_006.mp3"
+  },
+  {
+    "index": 7,
+    "start": "00:00:20,400",
+    "end": "00:00:21,706",
+    "duration": 1.31,
+    "text": "It's okay now, Miaomiao.",
+    "filename": "segment_007.mp3"
+  },
+  {
+    "index": 8,
+    "start": "00:00:23,266",
+    "end": "00:00:24,016",
+    "duration": 0.75,
+    "text": "Aaaaah!",
+    "filename": "segment_008.mp3"
+  },
+  {
+    "index": 9,
+    "start": "00:00:35,933",
+    "end": "00:00:36,504",
+    "duration": 0.57,
+    "text": "Pull me up!",
+    "filename": "segment_009.mp3"
+  },
+  {
+    "index": 10,
+    "start": "00:00:36,533",
+    "end": "00:00:38,151",
+    "duration": 1.62,
+    "text": "No, we can't save you.",
+    "filename": "segment_010.mp3"
+  },
+  {
+    "index": 11,
+    "start": "00:00:38,151",
+    "end": "00:00:39,528",
+    "duration": 1.38,
+    "text": "The raft's broken.",
+    "filename": "segment_011.mp3"
+  },
+  {
+    "index": 12,
+    "start": "00:00:39,528",
+    "end": "00:00:40,776",
+    "duration": 1.25,
+    "text": "It can't hold three.",
+    "filename": "segment_012.mp3"
+  },
+  {
+    "index": 13,
+    "start": "00:00:41,200",
+    "end": "00:00:41,879",
+    "duration": 0.68,
+    "text": "Miaomiao!",
+    "filename": "segment_013.mp3"
+  },
+  {
+    "index": 14,
+    "start": "00:00:41,879",
+    "end": "00:00:42,842",
+    "duration": 0.96,
+    "text": "I'm your boyfriend!",
+    "filename": "segment_014.mp3"
+  },
+  {
+    "index": 15,
+    "start": "00:00:42,842",
+    "end": "00:00:43,874",
+    "duration": 1.03,
+    "text": "How could you do this?",
+    "filename": "segment_015.mp3"
+  },
+  {
+    "index": 16,
+    "start": "00:00:43,900",
+    "end": "00:00:45,858",
+    "duration": 1.96,
+    "text": "The one I've always loved is Wang Kun.",
+    "filename": "segment_016.mp3"
+  },
+  {
+    "index": 17,
+    "start": "00:00:48,266",
+    "end": "00:00:49,806",
+    "duration": 1.54,
+    "text": "I even had his child.",
+    "filename": "segment_017.mp3"
+  },
+  {
+    "index": 18,
+    "start": "00:00:50,200",
+    "end": "00:00:50,554",
+    "duration": 0.35,
+    "text": "What?",
+    "filename": "segment_018.mp3"
+  },
+  {
+    "index": 19,
+    "start": "00:00:50,933",
+    "end": "00:00:51,987",
+    "duration": 1.05,
+    "text": "She's right.",
+    "filename": "segment_019.mp3"
+  },
+  {
+    "index": 20,
+    "start": "00:00:51,987",
+    "end": "00:00:52,813",
+    "duration": 0.83,
+    "text": "You stay here",
+    "filename": "segment_020.mp3"
+  },
+  {
+    "index": 21,
+    "start": "00:00:52,813",
+    "end": "00:00:54,701",
+    "duration": 1.89,
+    "text": "and distract that monster for us.",
+    "filename": "segment_021.mp3"
+  },
+  {
+    "index": 22,
+    "start": "00:00:58,000",
+    "end": "00:00:58,351",
+    "duration": 0.35,
+    "text": "No!",
+    "filename": "segment_022.mp3"
+  },
+  {
+    "index": 23,
+    "start": "00:00:58,351",
+    "end": "00:00:58,918",
+    "duration": 0.57,
+    "text": "You can't!",
+    "filename": "segment_023.mp3"
+  },
+  {
+    "index": 24,
+    "start": "00:00:58,933",
+    "end": "00:00:59,974",
+    "duration": 1.04,
+    "text": "Don't blame me!",
+    "filename": "segment_024.mp3"
+  },
+  {
+    "index": 25,
+    "start": "00:00:59,974",
+    "end": "00:01:01,141",
+    "duration": 1.17,
+    "text": "Every year on this date,",
+    "filename": "segment_025.mp3"
+  },
+  {
+    "index": 26,
+    "start": "00:01:01,141",
+    "end": "00:01:02,813",
+    "duration": 1.67,
+    "text": "I'll burn 10 billion for you.",
+    "filename": "segment_026.mp3"
+  },
+  {
+    "index": 27,
+    "start": "00:01:03,399",
+    "end": "00:01:05,202",
+    "duration": 1.8,
+    "text": "I'll burn 10 billion for you!",
+    "filename": "segment_027.mp3"
+  },
+  {
+    "index": 28,
+    "start": "00:01:08,433",
+    "end": "00:01:09,859",
+    "duration": 1.43,
+    "text": "I even had his child.",
+    "filename": "segment_028.mp3"
+  },
+  {
+    "index": 29,
+    "start": "00:01:09,859",
+    "end": "00:01:10,476",
+    "duration": 0.62,
+    "text": "Hahaha...",
+    "filename": "segment_029.mp3"
+  },
+  {
+    "index": 30,
+    "start": "00:01:12,766",
+    "end": "00:01:13,502",
+    "duration": 0.74,
+    "text": "What's going on?",
+    "filename": "segment_030.mp3"
+  },
+  {
+    "index": 31,
+    "start": "00:01:14,533",
+    "end": "00:01:15,743",
+    "duration": 1.21,
+    "text": "Didn't I die?",
+    "filename": "segment_031.mp3"
+  },
+  {
+    "index": 32,
+    "start": "00:01:15,743",
+    "end": "00:01:16,367",
+    "duration": 0.62,
+    "text": "I...",
+    "filename": "segment_032.mp3"
+  },
+  {
+    "index": 33,
+    "start": "00:01:16,367",
+    "end": "00:01:17,259",
+    "duration": 0.89,
+    "text": "I've been reborn",
+    "filename": "segment_033.mp3"
+  },
+  {
+    "index": 34,
+    "start": "00:01:17,259",
+    "end": "00:01:19,680",
+    "duration": 2.42,
+    "text": "back to when we first arrived on the island.",
+    "filename": "segment_034.mp3"
+  },
+  {
+    "index": 35,
+    "start": "00:01:20,800",
+    "end": "00:01:21,424",
+    "duration": 0.62,
+    "text": "Hahaha!",
+    "filename": "segment_035.mp3"
+  },
+  {
+    "index": 36,
+    "start": "00:01:24,700",
+    "end": "00:01:26,343",
+    "duration": 1.64,
+    "text": "Honey, you're finally awake.",
+    "filename": "segment_036.mp3"
+  },
+  {
+    "index": 37,
+    "start": "00:01:28,633",
+    "end": "00:01:29,386",
+    "duration": 0.75,
+    "text": "You passed out",
+    "filename": "segment_037.mp3"
+  },
+  {
+    "index": 38,
+    "start": "00:01:29,386",
+    "end": "00:01:30,802",
+    "duration": 1.42,
+    "text": "as soon as we got to the island.",
+    "filename": "segment_038.mp3"
+  },
+  {
+    "index": 39,
+    "start": "00:01:31,466",
+    "end": "00:01:32,477",
+    "duration": 1.01,
+    "text": "That's the mouth",
+    "filename": "segment_039.mp3"
+  },
+  {
+    "index": 40,
+    "start": "00:01:32,933",
+    "end": "00:01:34,918",
+    "duration": 1.98,
+    "text": "that said 'don't save him'.",
+    "filename": "segment_040.mp3"
+  },
+  {
+    "index": 41,
+    "start": "00:01:34,918",
+    "end": "00:01:36,033",
+    "duration": 1.11,
+    "text": "No, we can't save him.",
+    "filename": "segment_041.mp3"
+  },
+  {
+    "index": 42,
+    "start": "00:01:36,033",
+    "end": "00:01:37,130",
+    "duration": 1.1,
+    "text": "The raft's broken.",
+    "filename": "segment_042.mp3"
+  },
+  {
+    "index": 43,
+    "start": "00:01:37,166",
+    "end": "00:01:38,716",
+    "duration": 1.55,
+    "text": "You must have low blood sugar.",
+    "filename": "segment_043.mp3"
+  },
+  {
+    "index": 44,
+    "start": "00:01:38,716",
+    "end": "00:01:39,936",
+    "duration": 1.22,
+    "text": "Here, take the candy.",
+    "filename": "segment_044.mp3"
+  },
+  {
+    "index": 45,
+    "start": "00:01:40,033",
+    "end": "00:01:42,145",
+    "duration": 2.11,
+    "text": "That's the hand that pushed me into the abyss.",
+    "filename": "segment_045.mp3"
+  },
+  {
+    "index": 46,
+    "start": "00:01:42,300",
+    "end": "00:01:43,371",
+    "duration": 1.07,
+    "text": "Hey, hey, Kun!",
+    "filename": "segment_046.mp3"
+  },
+  {
+    "index": 47,
+    "start": "00:01:43,371",
+    "end": "00:01:44,311",
+    "duration": 0.94,
+    "text": "There you are!",
+    "filename": "segment_047.mp3"
+  },
+  {
+    "index": 48,
+    "start": "00:01:44,311",
+    "end": "00:01:45,664",
+    "duration": 1.35,
+    "text": "Let's go fishing in the lake.",
+    "filename": "segment_048.mp3"
+  },
+  {
+    "index": 49,
+    "start": "00:01:46,466",
+    "end": "00:01:47,225",
+    "duration": 0.76,
+    "text": "Sounds good.",
+    "filename": "segment_049.mp3"
+  },
+  {
+    "index": 50,
+    "start": "00:01:47,225",
+    "end": "00:01:49,108",
+    "duration": 1.88,
+    "text": "I've always heard the fish in this lake are",
+    "filename": "segment_050.mp3"
+  },
+  {
+    "index": 51,
+    "start": "00:01:49,108",
+    "end": "00:01:50,611",
+    "duration": 1.5,
+    "text": "huge and easy to catch.",
+    "filename": "segment_051.mp3"
+  },
+  {
+    "index": 52,
+    "start": "00:01:51,766",
+    "end": "00:01:53,435",
+    "duration": 1.67,
+    "text": "Big fish... in the lake?",
+    "filename": "segment_052.mp3"
+  },
+  {
+    "index": 53,
+    "start": "00:01:57,200",
+    "end": "00:01:57,996",
+    "duration": 0.8,
+    "text": "Monster...",
+    "filename": "segment_053.mp3"
+  },
+  {
+    "index": 54,
+    "start": "00:01:57,996",
+    "end": "00:01:59,340",
+    "duration": 1.34,
+    "text": "There's a monster in the lake!",
+    "filename": "segment_054.mp3"
+  }
+]
