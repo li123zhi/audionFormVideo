@@ -399,18 +399,27 @@ def subtitle_generate_upload():
         logger.info("=" * 60)
         logger.info("收到软硬字幕视频生成任务（完整版）")
 
+        # 检查是否为纯音频合成模式（不需要视频）
+        audio_only = request.form.get('audio_only', 'false').lower() == 'true'
+
         # 检查必需文件
-        if 'video' not in request.files:
-            return jsonify({'error': '缺少视频文件'}), 400
         if 'srt' not in request.files:
             return jsonify({'error': '缺少字幕文件'}), 400
 
-        video = request.files['video']
         srt = request.files['srt']
+
+        # 视频文件：仅在非纯音频模式下必需
+        video = request.files.get('video')
+        if not audio_only and not video:
+            return jsonify({'error': '缺少视频文件'}), 400
 
         # 获取可选文件
         original_srt = request.files.get('original_srt')
         audio_zip = request.files.get('audio')
+
+        # 纯音频合成模式下，音频文件是必需的
+        if audio_only and not audio_zip:
+            return jsonify({'error': '缺少配音音频文件'}), 400
 
         # 获取字幕配置
         subtitle_config_json = request.form.get('subtitle_config', '{}')
@@ -423,8 +432,11 @@ def subtitle_generate_upload():
         enable_ai_separation = request.form.get('enable_ai_separation', 'false').lower() == 'true'
         generate_no_subtitle = request.form.get('generate_no_subtitle', 'true').lower() == 'true'
 
-        if video.filename == '' or srt.filename == '':
-            return jsonify({'error': '文件名为空'}), 400
+        # 检查文件名
+        if srt.filename == '':
+            return jsonify({'error': '字幕文件名为空'}), 400
+        if video and video.filename == '':
+            return jsonify({'error': '视频文件名为空'}), 400
 
         # 生成任务ID
         task_id = str(uuid.uuid4())
@@ -433,11 +445,19 @@ def subtitle_generate_upload():
         task_dir = os.path.join(TASKS_FOLDER, f'subtitle_{task_id}')
         os.makedirs(task_dir, exist_ok=True)
 
-        # 保存视频和新字幕
-        video_path = os.path.join(task_dir, video.filename)
+        # 保存字幕文件
         srt_path = os.path.join(task_dir, srt.filename)
-        video.save(video_path)
         srt.save(srt_path)
+        logger.info(f"字幕文件: {srt.filename}")
+
+        # 保存视频（如果有）
+        video_path = None
+        if video and video.filename:
+            video_path = os.path.join(task_dir, video.filename)
+            video.save(video_path)
+            logger.info(f"视频文件: {video.filename}")
+        else:
+            logger.info("无视频文件（纯音频合成模式）")
 
         # 保存原字幕（如果提供）
         original_srt_path = None
@@ -458,37 +478,51 @@ def subtitle_generate_upload():
         os.makedirs(output_dir, exist_ok=True)
 
         logger.info(f"任务ID: {task_id}")
-        logger.info(f"视频: {video.filename} ({os.path.getsize(video_path) / 1024 / 1024:.2f} MB)")
+        if video and video.filename:
+            logger.info(f"视频: {video.filename} ({os.path.getsize(video_path) / 1024 / 1024:.2f} MB)")
         logger.info(f"字幕: {srt.filename}")
         logger.info(f"AI分离: {enable_ai_separation}")
         logger.info(f"生成无字幕视频: {generate_no_subtitle}")
         logger.info(f"💾 本地模式：文件保存在本地")
-        logger.info(f"   - 视频路径: {video_path}")
+        if video_path:
+            logger.info(f"   - 视频路径: {video_path}")
         logger.info(f"   - 字幕路径: {srt_path}")
+        if audio_zip_path:
+            logger.info(f"   - 配音路径: {audio_zip_path}")
+        logger.info(f"   - 纯音频模式: {audio_only}")
 
         # 初始化步骤列表
-        steps = [
-            {'id': 1, 'name': '提取音轨', 'status': 'pending', 'message': '等待开始...'},
-            {'id': 2, 'name': 'AI音频分离', 'status': 'pending', 'message': '等待开始...'},
-            {'id': 3, 'name': '合并配音', 'status': 'pending', 'message': '等待开始...'},
-            {'id': 4, 'name': '生成视频', 'status': 'pending', 'message': '等待开始...'},
-            {'id': 5, 'name': '完成', 'status': 'pending', 'message': '等待开始...'}
-        ]
+        if audio_only:
+            # 纯音频合成模式：只需要字幕和配音
+            steps = [
+                {'id': 1, 'name': '解析字幕', 'status': 'pending', 'message': '等待开始...'},
+                {'id': 2, 'name': '合成配音音轨', 'status': 'pending', 'message': '等待开始...'},
+                {'id': 3, 'name': '完成', 'status': 'pending', 'message': '等待开始...'}
+            ]
+        else:
+            # 完整视频生成模式
+            steps = [
+                {'id': 1, 'name': '提取音轨', 'status': 'pending', 'message': '等待开始...'},
+                {'id': 2, 'name': 'AI音频分离', 'status': 'pending', 'message': '等待开始...'},
+                {'id': 3, 'name': '合并配音', 'status': 'pending', 'message': '等待开始...'},
+                {'id': 4, 'name': '生成视频', 'status': 'pending', 'message': '等待开始...'},
+                {'id': 5, 'name': '完成', 'status': 'pending', 'message': '等待开始...'}
+            ]
 
-        # 根据选项调整步骤
-        if not enable_ai_separation and not audio_zip_path:
-            # 没有AI分离，没有配音，只生成视频
-            steps = [
-                {'id': 1, 'name': '生成不带字幕视频', 'status': 'pending', 'message': '等待开始...'},
-                {'id': 2, 'name': '生成软字幕视频', 'status': 'pending', 'message': '等待开始...'},
-                {'id': 3, 'name': '生成硬字幕视频', 'status': 'pending', 'message': '等待开始...'}
-            ]
-        elif not enable_ai_separation:
-            # 没有AI分离，但有配音
-            steps = [
-                {'id': 1, 'name': '合并配音', 'status': 'pending', 'message': '等待开始...'},
-                {'id': 2, 'name': '生成视频', 'status': 'pending', 'message': '等待开始...'}
-            ]
+            # 根据选项调整步骤
+            if not enable_ai_separation and not audio_zip_path:
+                # 没有AI分离，没有配音，只生成视频
+                steps = [
+                    {'id': 1, 'name': '生成不带字幕视频', 'status': 'pending', 'message': '等待开始...'},
+                    {'id': 2, 'name': '生成软字幕视频', 'status': 'pending', 'message': '等待开始...'},
+                    {'id': 3, 'name': '生成硬字幕视频', 'status': 'pending', 'message': '等待开始...'}
+                ]
+            elif not enable_ai_separation:
+                # 没有AI分离，但有配音
+                steps = [
+                    {'id': 1, 'name': '合并配音', 'status': 'pending', 'message': '等待开始...'},
+                    {'id': 2, 'name': '生成视频', 'status': 'pending', 'message': '等待开始...'}
+                ]
 
         # 初始化任务
         with subtitle_tasks_lock:
@@ -505,6 +539,7 @@ def subtitle_generate_upload():
                 'subtitle_config': subtitle_config,
                 'enable_ai_separation': enable_ai_separation,
                 'generate_no_subtitle': generate_no_subtitle,
+                'audio_only': audio_only,
                 'output_dir': output_dir,
                 'steps': steps,
                 'current_step': 0,
@@ -517,7 +552,7 @@ def subtitle_generate_upload():
         thread = threading.Thread(
             target=process_subtitle_generate_task_v2,
             args=(task_id, video_path, srt_path, output_dir, subtitle_config,
-                  original_srt_path, audio_zip_path, enable_ai_separation, generate_no_subtitle)
+                  original_srt_path, audio_zip_path, enable_ai_separation, generate_no_subtitle, audio_only)
         )
         thread.daemon = True
         logger.info(f"   线程对象已创建，准备启动...")
@@ -608,7 +643,7 @@ def process_subtitle_generate_task(task_id, video_path, srt_path, output_dir, su
 
 def process_subtitle_generate_task_v2(task_id, video_path, srt_path, output_dir,
                                      subtitle_config, original_srt_path, audio_zip_path,
-                                     enable_ai_separation, generate_no_subtitle):
+                                     enable_ai_separation, generate_no_subtitle, audio_only):
     """处理字幕生成任务（后台线程）- 使用video_processor的完整版本"""
     logger.info(f"🚀 [线程启动] 开始处理完整字幕生成任务 {task_id}")
 
@@ -653,6 +688,12 @@ def process_subtitle_generate_task_v2(task_id, video_path, srt_path, output_dir,
             result = _process_video_only(None, task_id, video_path, srt_path,
                                         output_dir, subtitle_config, original_srt_path,
                                         enable_ai_separation, generate_no_subtitle)
+        elif audio_only and not video_path:
+            # 纯音频合成模式：没有视频文件，只有字幕和配音
+            logger.info(f"   纯音频合成模式，不需要视频文件")
+            result = _process_audio_only_simple(
+                task_id, srt_path, output_dir, audio_zip_path
+            )
         else:
             logger.info(f"   有配音文件，使用完整处理流程")
             # 尝试使用 video_processor
@@ -917,7 +958,171 @@ def subtitle_generate_delete_task(task_id):
         return jsonify({'message': '任务已删除'})
 
 
-# ==================== 字幕音频分割API ====================
+def _process_audio_only_simple(task_id, srt_path, output_dir, audio_zip_path):
+    """处理纯音频合成（无视频文件模式）
+
+    根据字幕时间戳将配音文件合成为音轨，字幕之间填充静音
+
+    Args:
+        task_id: 任务ID
+        srt_path: 字幕文件路径
+        output_dir: 输出目录
+        audio_zip_path: 配音ZIP文件路径
+
+    Returns:
+        dict: 包含生成的文件路径
+    """
+    import subprocess
+    import zipfile
+    import glob
+    from pathlib import Path
+
+    result = {}
+    video_name = f"audio_mix_{task_id[:8]}"
+
+    try:
+        update_subtitle_task_status(task_id, 'processing', 10, '正在解析字幕文件...')
+
+        # 1. 解析字幕文件
+        subtitles = parse_srt(srt_path)
+        logger.info(f"📝 解析字幕文件: {len(subtitles)} 条字幕")
+
+        if not subtitles:
+            update_subtitle_task_status(task_id, 'failed', 0, '字幕文件为空')
+            return result
+
+        # 获取最后一条字幕的结束时间作为总时长
+        total_duration = subtitles[-1]['end']
+        logger.info(f"📹 音频总时长: {total_duration:.2f} 秒")
+
+        # 2. 解压配音文件
+        update_subtitle_task_status(task_id, 'processing', 30, '正在解压配音文件...')
+        zip_extract_dir = os.path.join(output_dir, 'audio_segments')
+        os.makedirs(zip_extract_dir, exist_ok=True)
+
+        with zipfile.ZipFile(audio_zip_path, 'r') as zip_ref:
+            zip_ref.extractall(zip_extract_dir)
+
+        logger.info(f"解压完成，目录: {zip_extract_dir}")
+
+        # 3. 获取所有音频文件并按名称排序
+        audio_files = []
+        for ext in ['*.mp3', '*.wav', '*.m4a']:
+            audio_files.extend(glob.glob(os.path.join(zip_extract_dir, ext)))
+        audio_files.sort()
+
+        logger.info(f"找到 {len(audio_files)} 个配音音频文件")
+
+        if len(audio_files) < len(subtitles):
+            logger.warning(f"⚠️ 配音音频数量 ({len(audio_files)}) 少于字幕数量 ({len(subtitles)})")
+
+        # 4. 创建临时目录
+        temp_dir = output_dir
+
+        # 5. 合成音频
+        update_subtitle_task_status(task_id, 'processing', 60, '正在合成音频...')
+
+        if not audio_files:
+            # 没有配音文件，生成全静音音频
+            logger.warning("⚠️ 没有配音文件，生成静音音频")
+            output_path = os.path.join(output_dir, f"{video_name}_mixed_audio.mp3")
+
+            cmd = [
+                'ffmpeg', '-y',
+                '-f', 'lavfi',
+                '-i', f'anullsrc=r=44100:cl=stereo',
+                '-t', str(total_duration),
+                '-q:a', '2',
+                '-b:a', '192k',
+                output_path
+            ]
+            subprocess.run(cmd, capture_output=True, check=True)
+            result['mixed_audio'] = output_path
+        else:
+            # 使用多音轨合成函数
+            success = merge_dubbing_audios(
+                srt_path,
+                zip_extract_dir,
+                os.path.join(output_dir, f"{video_name}_mixed_audio.mp3")
+            )
+
+            if success:
+                result['mixed_audio'] = os.path.join(output_dir, f"{video_name}_mixed_audio.mp3")
+            else:
+                update_subtitle_task_status(task_id, 'failed', 80, '音频合成失败')
+                return result
+
+        update_subtitle_task_status(task_id, 'processing', 100, '音频合成完成')
+
+        # 记录生成的文件
+        logger.info(f"📊 音频合成结果:")
+        for key, value in result.items():
+            if value:
+                logger.info(f"   ✅ {key}: {value}")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"❌ 纯音频合成失败: {e}")
+        import traceback
+        traceback.print_exc()
+        update_subtitle_task_status(task_id, 'failed', 0, f'处理失败: {str(e)}')
+        return result
+
+
+def _process_video_only(recomposer, task_id, video_path, srt_path, output_dir,
+                       subtitle_config, original_srt_path, enable_ai_separation, generate_no_subtitle):
+    """只处理视频，不处理音频（简化版本）"""
+    from moviepy import VideoFileClip
+    import subprocess
+
+    video_name = Path(video_path).stem
+    result = {}
+
+    # 1. 生成不带字幕的视频（如果需要）
+    if generate_no_subtitle:
+        update_subtitle_task_status(task_id, 'processing', 20, '正在生成不带字幕视频...')
+        no_subtitle_path = os.path.join(output_dir, f"{video_name}_no_subtitle.mp4")
+        # 直接复制原视频
+        subprocess.run(['ffmpeg', '-y', '-i', video_path, '-c', 'copy', no_subtitle_path],
+                      capture_output=True, check=True)
+        result['no_subtitle'] = no_subtitle_path
+        logger.info(f"✅ 不带字幕视频: {no_subtitle_path}")
+
+    # 2. 生成新字幕软字幕视频
+    update_subtitle_task_status(task_id, 'processing', 40, '正在生成新字幕软字幕视频...')
+    new_soft_path = os.path.join(output_dir, f"{video_name}_new_soft.mp4")
+    success = create_soft_subtitle_video(video_path, srt_path, new_soft_path)
+    if success:
+        result['new_soft_subtitle'] = new_soft_path
+        logger.info(f"✅ 新字幕软字幕视频: {new_soft_path}")
+
+    # 3. 生成新字幕硬字幕视频
+    update_subtitle_task_status(task_id, 'burning', 60, '正在生成新字幕硬字幕视频...')
+    new_hard_path = os.path.join(output_dir, f"{video_name}_new_hard.mp4")
+    success = create_hard_subtitle_video(video_path, srt_path, new_hard_path, subtitle_config)
+    if success:
+        result['new_hard_subtitle'] = new_hard_path
+        logger.info(f"✅ 新字幕硬字幕视频: {new_hard_path}")
+
+    # 4. 如果有原字幕，生成原字幕版本
+    if original_srt_path and os.path.exists(original_srt_path):
+        update_subtitle_task_status(task_id, 'burning', 80, '正在生成原字幕视频...')
+
+        original_soft_path = os.path.join(output_dir, f"{video_name}_original_soft.mp4")
+        success = create_soft_subtitle_video(video_path, original_srt_path, original_soft_path)
+        if success:
+            result['original_soft_subtitle'] = original_soft_path
+            logger.info(f"✅ 原字幕软字幕视频: {original_soft_path}")
+
+        original_hard_path = os.path.join(output_dir, f"{video_name}_original_hard.mp4")
+        success = create_hard_subtitle_video(video_path, original_srt_path, original_hard_path, subtitle_config)
+        if success:
+            result['original_hard_subtitle'] = original_hard_path
+            logger.info(f"✅ 原字幕硬字幕视频: {original_hard_path}")
+
+    return result
+
 
 audio_split_tasks = {}
 audio_split_tasks_lock = threading.Lock()
@@ -1192,15 +1397,16 @@ def extract_audio_segment(audio_path: str, start_time: float, duration: float, o
 
 
 def generate_silence(duration: float, output_path: str) -> bool:
-    """生成指定时长的静音MP3文件"""
+    """生成指定时长的静音MP3文件（立体声）"""
     try:
         cmd = [
             'ffmpeg', '-y',
             '-f', 'lavfi',
-            '-i', f'anullsrc=r=44100:cl=mono',
+            '-i', f'anullsrc=r=44100:cl=stereo',
             '-t', str(duration),
             '-acodec', 'libmp3lame',
             '-q:a', '2',
+            '-b:a', '192k',
             output_path
         ]
 
@@ -1851,7 +2057,10 @@ def separate_vocals_accompaniment(audio_path: str, output_dir: str) -> bool:
 
 
 def merge_dubbing_audios(srt_path: str, audio_dir: str, output_path: str) -> bool:
-    """根据字幕文件合并多个配音音频文件"""
+    """根据字幕文件合并多个配音音频文件
+
+    根据每个字幕的开始时间放置音频，字幕之间用静音填充
+    """
     try:
         logger.info(f"   正在合并配音音轨...")
 
@@ -1874,48 +2083,85 @@ def merge_dubbing_audios(srt_path: str, audio_dir: str, output_path: str) -> boo
 
         # 计算总时长（最后一条字幕的结束时间）
         total_duration = subtitles[-1]['end']
+        logger.info(f"   总时长: {total_duration:.2f} 秒")
 
-        # 创建临时文件列表
+        # 创建临时目录
         temp_dir = os.path.join(os.path.dirname(output_path), 'temp_merge')
         os.makedirs(temp_dir, exist_ok=True)
 
-        # 为每个字幕间隙生成静音，并构建concat列表
+        # 创建 concat 文件
         concat_file = os.path.join(temp_dir, 'concat.txt')
         segment_files = []
 
-        for i, sub in enumerate(subtitles):
-            # 添加当前字幕对应的音频（如果有对应的配音文件）
-            if i < len(audio_files):
-                audio_file = os.path.join(audio_dir, audio_files[i])
-                segment_file = os.path.join(temp_dir, f'segment_{i:03d}.mp3')
-                shutil.copy(audio_file, segment_file)
-                segment_files.append(segment_file)
-                logger.info(f"   添加配音片段 {i+1}: {audio_files[i]}")
+        current_time = 0.0
 
-            # 计算到下一个字幕的间隙
-            if i < len(subtitles) - 1:
-                gap = subtitles[i + 1]['start'] - sub['end']
-                if gap > 0.05:  # 大于50ms的间隙
+        for i in range(min(len(audio_files), len(subtitles))):
+            sub = subtitles[i]
+            audio_file = os.path.join(audio_dir, audio_files[i])
+
+            # 在当前时间点和字幕开始时间之间添加静音
+            if current_time < sub['start']:
+                gap = sub['start'] - current_time
+                if gap > 0.05:  # 大于50ms才生成静音
                     silence_file = os.path.join(temp_dir, f'silence_{i:03d}.mp3')
-                    success = generate_silence(gap, silence_file)
-                    if success:
+                    logger.info(f"   添加静音: {gap:.2f}秒 (从 {current_time:.2f}s 到 {sub['start']:.2f}s)")
+                    if generate_silence(gap, silence_file):
                         segment_files.append(silence_file)
+                        current_time += gap
 
-        # 使用ffmpeg concat协议合并音频
+            # 添加音频文件
+            logger.info(f"   添加音频 {i+1}: {audio_files[i]} (在 {sub['start']:.2f}s)")
+            segment_file = os.path.join(temp_dir, f'audio_{i:03d}.mp3')
+            shutil.copy(audio_file, segment_file)
+
+            # 验证文件复制成功
+            if os.path.exists(segment_file):
+                file_size = os.path.getsize(segment_file)
+                logger.info(f"      ✅ 文件已复制: {segment_file}, 大小: {file_size} 字节")
+                segment_files.append(segment_file)
+            else:
+                logger.error(f"      ❌ 文件复制失败: {segment_file}")
+                return False
+
+            # 更新当前时间（需要获取音频时长）
+            # 这里简化处理，假设音频时长不超过字幕时长
+            current_time = sub['end']
+
+        # 在最后添加静音直到总时长
+        if current_time < total_duration:
+            gap = total_duration - current_time
+            if gap > 0.05:
+                silence_file = os.path.join(temp_dir, f'silence_end.mp3')
+                logger.info(f"   添加结尾静音: {gap:.2f}秒")
+                if generate_silence(gap, silence_file):
+                    segment_files.append(silence_file)
+
+        # 写入 concat 文件
         with open(concat_file, 'w') as f:
             for segment in segment_files:
+                # 使用绝对路径，并转义特殊字符
                 f.write(f"file '{segment}'\n")
 
+        logger.info(f"   Concat 文件内容 (前5行):")
+        with open(concat_file, 'r') as f:
+            lines = f.readlines()
+            for line in lines[:5]:
+                logger.info(f"      {line.strip()}")
+
+        # 使用 ffmpeg concat 协议合并
         cmd = [
             'ffmpeg', '-y',
             '-f', 'concat',
             '-safe', '0',
             '-i', concat_file,
-            '-c', 'copy',
+            '-acodec', 'libmp3lame',
+            '-q:a', '2',
+            '-b:a', '192k',
             output_path
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        logger.info(f"   执行合并命令: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
 
         # 清理临时文件
         shutil.rmtree(temp_dir, ignore_errors=True)

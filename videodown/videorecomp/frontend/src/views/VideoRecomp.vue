@@ -817,6 +817,225 @@
             </div>
           </el-card>
         </el-tab-pane>
+
+        <!-- 多音轨合成 -->
+        <el-tab-pane label="多音轨合成" name="multi-track-mix">
+          <el-card class="main-card">
+            <template #header>
+              <div class="card-header">
+                <el-icon><Headset /></el-icon>
+                <span>根据字幕时间轴合成多个音轨</span>
+              </div>
+            </template>
+
+            <!-- 上传区域 -->
+            <div class="upload-section">
+              <el-form label-width="140px">
+                <!-- 字幕文件上传 -->
+                <el-form-item label="字幕文件" required>
+                  <el-upload
+                    ref="multiTrackSrtUpload"
+                    class="upload-demo"
+                    drag
+                    :auto-upload="false"
+                    :limit="1"
+                    :on-change="(file) => handleMultiTrackFileChange(file, 'srt')"
+                    :on-remove="() => handleMultiTrackFileRemove('srt')"
+                    accept=".srt"
+                  >
+                    <el-icon class="el-icon--upload"><Document /></el-icon>
+                    <div class="el-upload__text">
+                      拖拽SRT文件到此处或 <em>点击上传</em>
+                    </div>
+                    <template #tip>
+                      <div class="el-upload__tip">
+                        SRT字幕文件（用于确定配音时间轴）
+                      </div>
+                    </template>
+                  </el-upload>
+                </el-form-item>
+
+                <!-- 配音音频文件上传 -->
+                <el-form-item label="配音音频文件" required>
+                  <el-upload
+                    ref="multiTrackDubbingUpload"
+                    class="upload-demo"
+                    drag
+                    :auto-upload="false"
+                    :limit="1"
+                    :on-change="(file) => handleMultiTrackFileChange(file, 'dubbing')"
+                    :on-remove="() => handleMultiTrackFileRemove('dubbing')"
+                    accept=".zip"
+                  >
+                    <el-icon class="el-icon--upload"><Folder-Opened /></el-icon>
+                    <div class="el-upload__text">
+                      拖拽配音音频ZIP到此处或 <em>点击上传</em>
+                    </div>
+                    <template #tip>
+                      <div class="el-upload__tip">
+                        包含多个MP3配音文件的ZIP压缩包（按文件名排序对应字幕）
+                      </div>
+                    </template>
+                  </el-upload>
+                </el-form-item>
+
+                <!-- 说明信息 -->
+                <el-alert
+                  title="合成说明"
+                  type="info"
+                  :closable="false"
+                  style="margin-bottom: 20px;"
+                >
+                  <template #default>
+                    <ul style="margin: 0; padding-left: 20px;">
+                      <li>字幕文件与配音文件按顺序一一对应</li>
+                      <li>根据字幕时间戳精确定位配音位置</li>
+                      <li>字幕之间自动填充静音</li>
+                      <li>输出为MP3格式的音轨文件</li>
+                    </ul>
+                  </template>
+                </el-alert>
+
+                <!-- 操作按钮 -->
+                <el-form-item>
+                  <el-button
+                    type="primary"
+                    size="large"
+                    :loading="multiTrackProcessing"
+                    :disabled="!canStartMultiTrackMix"
+                    @click="handleMultiTrackMix"
+                  >
+                    <el-icon v-if="!multiTrackProcessing"><Video-Play /></el-icon>
+                    {{ multiTrackProcessing ? '处理中...' : '开始合成' }}
+                  </el-button>
+
+                  <el-button
+                    v-if="multiTrackTaskId"
+                    type="danger"
+                    size="large"
+                    @click="handleMultiTrackCancel"
+                  >
+                    <el-icon><Close-Bold /></el-icon>
+                    取消任务
+                  </el-button>
+                </el-form-item>
+              </el-form>
+            </div>
+
+            <!-- 处理结果 -->
+            <div v-if="multiTrackProcessing || multiTrackCompleted" class="result-section">
+              <el-card class="result-card">
+                <template #header>
+                  <div class="card-header">
+                    <el-icon><Data-Analysis /></el-icon>
+                    <span>处理进度</span>
+                  </div>
+                </template>
+
+                <!-- 进度条 -->
+                <div v-if="multiTrackProcessing" class="progress-wrapper">
+                  <el-progress
+                    :percentage="multiTrackProgress"
+                    :status="multiTrackProgressStatus"
+                    :stroke-width="26"
+                  >
+                    <span class="progress-text">{{ multiTrackProgress }}%</span>
+                  </el-progress>
+                  <div class="progress-message">{{ multiTrackStatusMessage }}</div>
+
+                  <!-- 详细步骤列表 -->
+                  <div class="steps-list" style="margin-top: 20px;">
+                    <el-timeline>
+                      <el-timeline-item
+                        v-for="step in multiTrackSteps"
+                        :key="step.id"
+                        :type="getStepStatusType(step.status)"
+                        :icon="getStepIcon(step.status)"
+                        :color="getStepColor(step.status)"
+                      >
+                        <div class="step-item">
+                          <div class="step-header">
+                            <span class="step-name">{{ step.name }}</span>
+                            <el-tag
+                              :type="getStepTagType(step.status)"
+                              size="small"
+                              effect="plain"
+                            >
+                              {{ getStepStatusText(step.status) }}
+                            </el-tag>
+                          </div>
+                          <div class="step-message">{{ step.message }}</div>
+                        </div>
+                      </el-timeline-item>
+                    </el-timeline>
+                  </div>
+                </div>
+
+                <!-- 完成状态 -->
+                <div v-if="multiTrackCompleted" class="success-section">
+                  <el-result
+                    icon="success"
+                    title="多音轨合成完成"
+                    :sub-title="`处理时长: ${multiTrackProcessingTime}秒`"
+                  >
+                    <template #extra>
+                      <el-descriptions :column="1" border>
+                        <el-descriptions-item label="任务ID">{{ multiTrackTaskId }}</el-descriptions-item>
+                        <el-descriptions-item label="字幕文件">{{ multiTrackFiles.srt?.name }}</el-descriptions-item>
+                        <el-descriptions-item label="配音文件">{{ multiTrackFiles.dubbing?.name }}</el-descriptions-item>
+                        <el-descriptions-item label="输出格式">MP3</el-descriptions-item>
+                      </el-descriptions>
+
+                      <!-- 下载文件 -->
+                      <div style="margin-top: 24px;">
+                        <h4 style="margin-bottom: 16px;">下载文件</h4>
+                        <el-button
+                          type="primary"
+                          size="large"
+                          @click="downloadMultiTrackFile('mixed_audio')"
+                        >
+                          <el-icon><Download /></el-icon>
+                          下载合成音轨 (MP3)
+                        </el-button>
+                      </div>
+
+                      <!-- 音频试听 -->
+                      <div v-if="multiTrackGeneratedFiles.mixed_audio" style="margin-top: 24px;">
+                        <h4 style="margin-bottom: 16px;">音频试听</h4>
+                        <audio
+                          :src="multiTrackAudioPreviewUrl"
+                          controls
+                          style="width: 100%;"
+                        >
+                          您的浏览器不支持音频播放
+                        </audio>
+                      </div>
+                    </template>
+                  </el-result>
+                </div>
+
+                <!-- 说明 -->
+                <div class="info-section">
+                  <el-alert
+                    title="多音轨合成说明"
+                    type="info"
+                    :closable="false"
+                  >
+                    <template #default>
+                      <ul>
+                        <li><strong>字幕对齐：</strong>根据字幕时间戳将配音音频放置在正确的时间位置</li>
+                        <li><strong>静音填充：</strong>字幕之间的空隙自动填充静音</li>
+                        <li><strong>AI分离（可选）：</strong>使用Demucs从原视频分离人声和伴奏</li>
+                        <li><strong>智能混合：</strong>将分离后的伴奏与配音按比例混合</li>
+                        <li><strong>输出文件：</strong>生成MP3格式的混合音频文件</li>
+                      </ul>
+                    </template>
+                  </el-alert>
+                </div>
+              </el-card>
+            </div>
+          </el-card>
+        </el-tab-pane>
       </el-tabs>
     </div>
   </div>
@@ -850,6 +1069,7 @@ import {
   generateSubtitleVideos,
   getSubtitleGenerateStatus,
   downloadSubtitleVideo,
+  deleteSubtitleGenerateTask,
   splitAudioBySubtitles,
   getAudioSplitStatus,
   downloadAudioSplitResult,
@@ -1469,6 +1689,191 @@ const cancelAudioMix = async () => {
   } catch (error) {
     console.error('取消任务失败:', error)
     ElMessage.error('取消任务失败')
+  }
+}
+
+// ==================== 多音轨合成功能 ====================
+
+// 多音轨合成文件存储
+const multiTrackFiles = ref({
+  srt: null,
+  dubbing: null
+})
+
+// 多音轨合成状态
+const multiTrackProcessing = ref(false)
+const multiTrackCompleted = ref(false)
+const multiTrackProgress = ref(0)
+const multiTrackProgressStatus = ref('')
+const multiTrackStatusMessage = ref('')
+const multiTrackTaskId = ref(null)
+const multiTrackStartTime = ref(null)
+const multiTrackSteps = ref([])
+const multiTrackGeneratedFiles = ref({
+  mixed_audio: null,
+  merged_audio: null,
+  vocals: null,
+  no_vocals: null
+})
+const multiTrackAudioPreviewUrl = ref('')
+
+// 计算属性：是否可以开始多音轨合成
+const canStartMultiTrackMix = computed(() => {
+  return multiTrackFiles.value.srt && multiTrackFiles.value.dubbing && !multiTrackProcessing.value
+})
+
+// 多音轨合成处理时间
+const multiTrackProcessingTime = computed(() => {
+  if (!multiTrackStartTime.value) return 0
+  return Math.round((Date.now() - multiTrackStartTime.value) / 1000)
+})
+
+// 处理多音轨合成文件选择
+const handleMultiTrackFileChange = (file, type) => {
+  multiTrackFiles.value[type] = file.raw
+}
+
+// 处理多音轨合成文件移除
+const handleMultiTrackFileRemove = (type) => {
+  multiTrackFiles.value[type] = null
+}
+
+// 处理多音轨合成
+const handleMultiTrackMix = async () => {
+  if (!canStartMultiTrackMix.value) {
+    ElMessage.warning('请先上传字幕文件和配音文件')
+    return
+  }
+
+  try {
+    multiTrackProcessing.value = true
+    multiTrackProgress.value = 0
+    multiTrackStatusMessage.value = '正在上传文件...'
+    multiTrackStartTime.value = Date.now()
+    multiTrackCompleted.value = false
+    multiTrackSteps.value = []
+
+    // 创建FormData
+    const formData = new FormData()
+    formData.append('srt', multiTrackFiles.value.srt)
+    formData.append('audio', multiTrackFiles.value.dubbing)
+    formData.append('audio_only', 'true')  // 仅合成音频模式
+
+    ElMessage.info('开始合成音频，请稍候...')
+
+    // 调用上传API
+    const response = await generateSubtitleVideos(formData, (progress) => {
+      multiTrackProgress.value = progress
+      multiTrackStatusMessage.value = `上传中... ${progress}%`
+    })
+
+    multiTrackTaskId.value = response.data.task_id
+    multiTrackStatusMessage.value = '正在处理音轨合成...'
+
+    // 开始轮询任务状态
+    pollMultiTrackStatus()
+
+  } catch (error) {
+    console.error('多音轨合成失败:', error)
+    ElMessage.error(error.response?.data?.error || error.message || '多音轨合成失败')
+    multiTrackProcessing.value = false
+  }
+}
+
+// 轮询多音轨合成状态
+const pollMultiTrackStatus = async () => {
+  if (!multiTrackTaskId.value) return
+
+  try {
+    const interval = setInterval(async () => {
+      const response = await getSubtitleGenerateStatus(multiTrackTaskId.value)
+      const status = response.data.status
+
+      multiTrackProgress.value = status.progress || 0
+      multiTrackStatusMessage.value = status.message || '正在处理...'
+
+      // 更新步骤信息
+      if (status.steps) {
+        multiTrackSteps.value = status.steps
+      }
+
+      if (status.status === 'completed') {
+        clearInterval(interval)
+        multiTrackProcessing.value = false
+        multiTrackCompleted.value = true
+        multiTrackProgress.value = 100
+
+        // 获取生成的文件
+        const files = status.files || {}
+        multiTrackGeneratedFiles.value = {
+          mixed_audio: files.mixed_audio,
+          merged_audio: files.merged_audio,
+          vocals: files.vocals,
+          no_vocals: files.no_vocals
+        }
+
+        // 设置音频预览URL
+        if (files.mixed_audio) {
+          multiTrackAudioPreviewUrl.value = `/api/subtitle-generate/audio/${multiTrackTaskId.value}/mixed_audio?t=${Date.now()}`
+        }
+
+        ElMessage.success('多音轨合成完成！')
+      } else if (status.status === 'failed') {
+        clearInterval(interval)
+        multiTrackProcessing.value = false
+        ElMessage.error(status.message || '多音轨合成失败')
+      }
+    }, 2000)
+
+  } catch (error) {
+    console.error('查询状态失败:', error)
+    multiTrackProcessing.value = false
+    ElMessage.error('查询状态失败')
+  }
+}
+
+// 取消多音轨合成任务
+const handleMultiTrackCancel = async () => {
+  if (!multiTrackTaskId.value) return
+
+  try {
+    await deleteSubtitleGenerateTask(multiTrackTaskId.value)
+    ElMessage.success('任务已取消')
+    multiTrackProcessing.value = false
+    multiTrackTaskId.value = null
+    multiTrackSteps.value = []
+  } catch (error) {
+    console.error('取消任务失败:', error)
+    ElMessage.error('取消任务失败')
+  }
+}
+
+// 下载多音轨合成文件
+const downloadMultiTrackFile = async (fileType) => {
+  if (!multiTrackTaskId.value) {
+    ElMessage.warning('任务不存在')
+    return
+  }
+
+  try {
+    const fileTypeMap = {
+      'mixed_audio': 'mixed_audio',
+      'merged_audio': 'merged_audio',
+      'vocals': 'vocals',
+      'no_vocals': 'no_vocals'
+    }
+
+    const downloadType = fileTypeMap[fileType]
+    if (!downloadType) {
+      ElMessage.error('不支持的文件类型')
+      return
+    }
+
+    await downloadSubtitleVideo(multiTrackTaskId.value, downloadType)
+    ElMessage.success('下载成功')
+  } catch (error) {
+    console.error('下载失败:', error)
+    ElMessage.error(error.message || '下载失败')
   }
 }
 
