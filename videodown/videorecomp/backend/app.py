@@ -675,6 +675,7 @@ def process_subtitle_generate_task_v2(task_id, video_path, srt_path, output_dir,
                 'outline_colour': subtitle_config.get('outlineColor', '&H000000'),
                 'outline': subtitle_config.get('outline', 1) if subtitle_config.get('outline') else 0,
                 'margin_v': subtitle_config.get('bottomMargin', 100),
+                'max_width_ratio': subtitle_config.get('maxWidthRatio', 90),
                 'alignment': 'center'
             }
 

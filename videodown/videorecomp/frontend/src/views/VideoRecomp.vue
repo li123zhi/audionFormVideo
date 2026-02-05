@@ -828,8 +828,13 @@
               </div>
             </template>
 
-            <!-- 上传区域 -->
-            <div class="upload-section">
+            <!-- 步骤1：上传字幕和配音 -->
+            <div v-if="!multiTrackAudioCompleted" class="upload-section">
+              <el-steps :active="multiTrackStep" finish-status="success" style="margin-bottom: 30px;">
+                <el-step title="合成音轨" description="上传字幕和配音文件"></el-step>
+                <el-step title="生成视频" description="上传原视频合成最终视频"></el-step>
+              </el-steps>
+
               <el-form label-width="140px">
                 <!-- 字幕文件上传 -->
                 <el-form-item label="字幕文件" required>
@@ -906,7 +911,7 @@
                     @click="handleMultiTrackMix"
                   >
                     <el-icon v-if="!multiTrackProcessing"><Video-Play /></el-icon>
-                    {{ multiTrackProcessing ? '处理中...' : '开始合成' }}
+                    {{ multiTrackProcessing ? '合成中...' : '开始合成音轨' }}
                   </el-button>
 
                   <el-button
@@ -920,119 +925,296 @@
                   </el-button>
                 </el-form-item>
               </el-form>
+
+              <!-- 完成状态 -->
+              <div v-if="multiTrackAudioCompleted" class="success-section" style="margin-top: 30px;">
+                <el-result
+                  icon="success"
+                  title="音轨合成完成"
+                >
+                  <template #extra>
+                    <el-descriptions :column="1" border>
+                      <el-descriptions-item label="任务ID">{{ multiTrackTaskId }}</el-descriptions-item>
+                      <el-descriptions-item label="字幕文件">{{ multiTrackFiles.srt?.name }}</el-descriptions-item>
+                      <el-descriptions-item label="配音文件">{{ multiTrackFiles.dubbing?.name }}</el-descriptions-item>
+                      <el-descriptions-item label="输出格式">MP3</el-descriptions-item>
+                    </el-descriptions>
+
+                    <!-- 下载文件 -->
+                    <div style="margin-top: 24px;">
+                      <h4 style="margin-bottom: 16px;">下载文件</h4>
+                      <el-button
+                        type="primary"
+                        size="large"
+                        @click="downloadMultiTrackFile('mixed_audio')"
+                      >
+                        <el-icon><Download /></el-icon>
+                        下载合成音轨 (MP3)
+                      </el-button>
+                    </div>
+
+                    <!-- 音频试听 -->
+                    <div v-if="multiTrackGeneratedFiles.mixed_audio" style="margin-top: 24px;">
+                      <h4 style="margin-bottom: 16px;">音频试听</h4>
+                      <audio
+                        :src="multiTrackAudioPreviewUrl"
+                        controls
+                        style="width: 100%;"
+                      >
+                        您的浏览器不支持音频播放
+                      </audio>
+                    </div>
+
+                    <!-- 继续按钮 -->
+                    <div style="margin-top: 24px;">
+                      <el-button type="success" size="large" @click="multiTrackStep = 1">
+                        <el-icon><Right /></el-icon>
+                        下一步：上传原视频
+                      </el-button>
+                    </div>
+                  </template>
+                </el-result>
+              </div>
             </div>
 
-            <!-- 处理结果 -->
-            <div v-if="multiTrackProcessing || multiTrackCompleted" class="result-section">
-              <el-card class="result-card">
-                <template #header>
-                  <div class="card-header">
-                    <el-icon><Data-Analysis /></el-icon>
-                    <span>处理进度</span>
-                  </div>
-                </template>
+            <!-- 步骤2：上传原视频 -->
+            <div v-else class="upload-section">
+              <el-steps :active="1" finish-status="success" style="margin-bottom: 30px;">
+                <el-step title="合成音轨" description="上传字幕和配音文件"></el-step>
+                <el-step title="生成视频" description="上传原视频合成最终视频"></el-step>
+              </el-steps>
 
-                <!-- 进度条 -->
-                <div v-if="multiTrackProcessing" class="progress-wrapper">
-                  <el-progress
-                    :percentage="multiTrackProgress"
-                    :status="multiTrackProgressStatus"
-                    :stroke-width="26"
+              <el-form label-width="140px">
+                <!-- 原视频上传 -->
+                <el-form-item label="原视频文件" required>
+                  <el-upload
+                    ref="multiTrackVideoUpload"
+                    class="upload-demo"
+                    drag
+                    :auto-upload="false"
+                    :limit="1"
+                    :on-change="(file) => handleMultiTrackFileChange(file, 'video')"
+                    :on-remove="() => handleMultiTrackFileRemove('video')"
+                    accept="video/*"
                   >
-                    <span class="progress-text">{{ multiTrackProgress }}%</span>
-                  </el-progress>
-                  <div class="progress-message">{{ multiTrackStatusMessage }}</div>
+                    <el-icon class="el-icon--upload"><Video-Camera /></el-icon>
+                    <div class="el-upload__text">
+                      拖拽视频文件到此处或 <em>点击上传</em>
+                    </div>
+                    <template #tip>
+                      <div class="el-upload__tip">
+                        原视频文件（MP4、AVI、MOV等格式）
+                      </div>
+                    </template>
+                  </el-upload>
+                </el-form-item>
 
-                  <!-- 详细步骤列表 -->
-                  <div class="steps-list" style="margin-top: 20px;">
-                    <el-timeline>
-                      <el-timeline-item
-                        v-for="step in multiTrackSteps"
-                        :key="step.id"
-                        :type="getStepStatusType(step.status)"
-                        :icon="getStepIcon(step.status)"
-                        :color="getStepColor(step.status)"
-                      >
-                        <div class="step-item">
-                          <div class="step-header">
-                            <span class="step-name">{{ step.name }}</span>
-                            <el-tag
-                              :type="getStepTagType(step.status)"
-                              size="small"
-                              effect="plain"
-                            >
-                              {{ getStepStatusText(step.status) }}
-                            </el-tag>
-                          </div>
-                          <div class="step-message">{{ step.message }}</div>
-                        </div>
-                      </el-timeline-item>
-                    </el-timeline>
-                  </div>
-                </div>
+                <!-- 字幕样式配置 -->
+                <el-divider content-position="left">
+                  <el-icon><Edit /></el-icon>
+                  <span style="margin-left: 8px;">字幕样式设置</span>
+                </el-divider>
 
-                <!-- 完成状态 -->
-                <div v-if="multiTrackCompleted" class="success-section">
-                  <el-result
-                    icon="success"
-                    title="多音轨合成完成"
-                    :sub-title="`处理时长: ${multiTrackProcessingTime}秒`"
+                <el-form-item label="字幕样式">
+                  <el-checkbox v-model="multiTrackSubtitleConfig.bold">加粗</el-checkbox>
+                  <el-checkbox v-model="multiTrackSubtitleConfig.italic">斜体</el-checkbox>
+                  <el-checkbox v-model="multiTrackSubtitleConfig.outline">描边</el-checkbox>
+                  <el-checkbox v-model="multiTrackSubtitleConfig.shadow">阴影</el-checkbox>
+                </el-form-item>
+
+                <el-form-item label="字体大小">
+                  <el-slider
+                    v-model="multiTrackSubtitleConfig.fontSize"
+                    :min="12"
+                    :max="48"
+                    :step="2"
+                    show-input
+                  />
+                </el-form-item>
+
+                <el-form-item label="字体颜色">
+                  <el-color-picker v-model="multiTrackSubtitleConfig.fontColor" show-alpha />
+                  <span style="margin-left: 10px;">{{ multiTrackSubtitleConfig.fontColor }}</span>
+                </el-form-item>
+
+                <el-form-item label="描边颜色">
+                  <el-color-picker v-model="multiTrackSubtitleConfig.outlineColor" show-alpha />
+                  <span style="margin-left: 10px;">{{ multiTrackSubtitleConfig.outlineColor }}</span>
+                  <div class="el-upload__tip">字幕描边的颜色</div>
+                </el-form-item>
+
+                <el-form-item label="底部边距">
+                  <el-slider
+                    v-model="multiTrackSubtitleConfig.bottomMargin"
+                    :min="20"
+                    :max="200"
+                    :step="10"
+                    show-input
+                  />
+                  <div class="el-upload__tip">字幕距离视频底部的像素距离</div>
+                </el-form-item>
+
+                <el-form-item label="字幕宽度">
+                  <el-slider
+                    v-model="multiTrackSubtitleConfig.maxWidthRatio"
+                    :min="30"
+                    :max="100"
+                    :step="5"
+                    show-input
+                    :format-tooltip="(val) => val + '%'"
+                  />
+                  <div class="el-upload__tip">字幕最大宽度占视频宽度的百分比（超过此宽度将自动换行）</div>
+                </el-form-item>
+
+                <el-form-item label="描边宽度">
+                  <el-slider
+                    v-model="multiTrackSubtitleConfig.outlineWidth"
+                    :min="0"
+                    :max="5"
+                    :step="1"
+                    show-input
+                  />
+                  <div class="el-upload__tip">字幕描边的宽度（0表示无描边）</div>
+                </el-form-item>
+
+                <!-- AI音频分离 -->
+                <el-divider content-position="left">
+                  <el-icon><Headset /></el-icon>
+                  <span style="margin-left: 8px;">AI音频分离（可选）</span>
+                </el-divider>
+
+                <el-alert
+                  title="分离说明"
+                  type="info"
+                  :closable="false"
+                  style="margin-bottom: 20px;"
+                >
+                  <template #default>
+                    <ul style="margin: 0; padding-left: 20px;">
+                      <li>使用AI技术将原视频音轨分离为人声和伴奏</li>
+                      <li>分离后可以下载伴奏.mp3和人声.mp3文件</li>
+                      <li>此过程可能需要几分钟，请耐心等待</li>
+                    </ul>
+                  </template>
+                </el-alert>
+
+                <el-form-item>
+                  <el-button
+                    type="warning"
+                    size="large"
+                    :loading="multiTrackAISeparating"
+                    :disabled="!canStartMultiTrackAISeparation"
+                    @click="handleMultiTrackAISeparation"
                   >
+                    <el-icon v-if="!multiTrackAISeparating"><MagicStick /></el-icon>
+                    {{ multiTrackAISeparating ? '分离中...' : 'AI音频分离' }}
+                  </el-button>
+
+                  <el-button
+                    v-if="multiTrackAISeparationCompleted"
+                    type="success"
+                    size="large"
+                    @click="downloadMultiTrackAISeparatedFiles"
+                    style="margin-left: 10px;"
+                  >
+                    <el-icon><Download /></el-icon>
+                    下载分离结果
+                  </el-button>
+                </el-form-item>
+
+                <!-- AI分离结果 -->
+                <div v-if="multiTrackAISeparationCompleted" style="margin-top: 20px;">
+                  <el-result icon="success" title="音频分离完成" sub-title="已成功分离出人声和伴奏">
                     <template #extra>
                       <el-descriptions :column="1" border>
-                        <el-descriptions-item label="任务ID">{{ multiTrackTaskId }}</el-descriptions-item>
-                        <el-descriptions-item label="字幕文件">{{ multiTrackFiles.srt?.name }}</el-descriptions-item>
-                        <el-descriptions-item label="配音文件">{{ multiTrackFiles.dubbing?.name }}</el-descriptions-item>
-                        <el-descriptions-item label="输出格式">MP3</el-descriptions-item>
+                        <el-descriptions-item label="伴奏文件">no_vocals.mp3</el-descriptions-item>
+                        <el-descriptions-item label="人声文件">vocals.mp3</el-descriptions-item>
                       </el-descriptions>
-
-                      <!-- 下载文件 -->
-                      <div style="margin-top: 24px;">
-                        <h4 style="margin-bottom: 16px;">下载文件</h4>
-                        <el-button
-                          type="primary"
-                          size="large"
-                          @click="downloadMultiTrackFile('mixed_audio')"
-                        >
-                          <el-icon><Download /></el-icon>
-                          下载合成音轨 (MP3)
-                        </el-button>
-                      </div>
-
-                      <!-- 音频试听 -->
-                      <div v-if="multiTrackGeneratedFiles.mixed_audio" style="margin-top: 24px;">
-                        <h4 style="margin-bottom: 16px;">音频试听</h4>
-                        <audio
-                          :src="multiTrackAudioPreviewUrl"
-                          controls
-                          style="width: 100%;"
-                        >
-                          您的浏览器不支持音频播放
-                        </audio>
-                      </div>
                     </template>
                   </el-result>
                 </div>
 
-                <!-- 说明 -->
-                <div class="info-section">
-                  <el-alert
-                    title="多音轨合成说明"
-                    type="info"
-                    :closable="false"
+                <!-- 说明信息 -->
+                <el-alert
+                  title="视频合成说明"
+                  type="info"
+                  :closable="false"
+                  style="margin-bottom: 20px; margin-top: 20px;"
+                >
+                  <template #default>
+                    <ul style="margin: 0; padding-left: 20px;">
+                      <li>将使用步骤1合成的音轨替换原视频的音频</li>
+                      <li>根据字幕文件和上述样式设置生成字幕</li>
+                      <li>生成包含新配音和字幕的最终视频</li>
+                    </ul>
+                  </template>
+                </el-alert>
+
+                <!-- 操作按钮 -->
+                <el-form-item>
+                  <el-button size="large" @click="multiTrackStep = 0">
+                    <el-icon><Back /></el-icon>
+                    返回上一步
+                  </el-button>
+
+                  <el-button
+                    type="primary"
+                    size="large"
+                    :loading="multiTrackVideoProcessing"
+                    :disabled="!canStartMultiTrackVideo"
+                    @click="handleMultiTrackVideoMix"
                   >
-                    <template #default>
-                      <ul>
-                        <li><strong>字幕对齐：</strong>根据字幕时间戳将配音音频放置在正确的时间位置</li>
-                        <li><strong>静音填充：</strong>字幕之间的空隙自动填充静音</li>
-                        <li><strong>AI分离（可选）：</strong>使用Demucs从原视频分离人声和伴奏</li>
-                        <li><strong>智能混合：</strong>将分离后的伴奏与配音按比例混合</li>
-                        <li><strong>输出文件：</strong>生成MP3格式的混合音频文件</li>
-                      </ul>
-                    </template>
-                  </el-alert>
-                </div>
-              </el-card>
+                    <el-icon v-if="!multiTrackVideoProcessing"><Video-Play /></el-icon>
+                    {{ multiTrackVideoProcessing ? '生成中...' : '开始生成视频' }}
+                  </el-button>
+                </el-form-item>
+              </el-form>
+
+              <!-- 视频生成完成 -->
+              <div v-if="multiTrackVideoCompleted" class="success-section" style="margin-top: 30px;">
+                <el-result
+                  icon="success"
+                  title="视频生成完成"
+                >
+                  <template #extra>
+                    <el-descriptions :column="1" border>
+                      <el-descriptions-item label="任务ID">{{ multiTrackTaskId }}</el-descriptions-item>
+                      <el-descriptions-item label="视频文件">{{ multiTrackFiles.video?.name }}</el-descriptions-item>
+                      <el-descriptions-item label="音轨文件">{{ multiTrackFiles.srt?.name }}</el-descriptions-item>
+                    </el-descriptions>
+
+                    <!-- 下载视频 -->
+                    <div style="margin-top: 24px;">
+                      <h4 style="margin-bottom: 16px;">下载文件</h4>
+                      <el-button
+                        type="primary"
+                        size="large"
+                        @click="downloadMultiTrackVideo('soft')"
+                      >
+                        <el-icon><Download /></el-icon>
+                        下载软字幕视频
+                      </el-button>
+                      <el-button
+                        type="success"
+                        size="large"
+                        @click="downloadMultiTrackVideo('hard')"
+                        style="margin-left: 10px;"
+                      >
+                        <el-icon><Download /></el-icon>
+                        下载硬字幕视频
+                      </el-button>
+                    </div>
+
+                    <!-- 重新开始 -->
+                    <div style="margin-top: 24px;">
+                      <el-button type="info" size="large" @click="resetMultiTrack">
+                        <el-icon><Refresh-Right /></el-icon>
+                        重新开始
+                      </el-button>
+                    </div>
+                  </template>
+                </el-result>
+              </div>
             </div>
           </el-card>
         </el-tab-pane>
@@ -1063,7 +1245,11 @@ import {
   CloseBold,
   DataAnalysis,
   Clock,
-  CircleClose
+  CircleClose,
+  Back,
+  Right,
+  Edit,
+  MagicStick
 } from '@element-plus/icons-vue'
 import {
   generateSubtitleVideos,
@@ -1101,7 +1287,9 @@ const subtitleConfig = ref({
   outline: true,
   shadow: true,
   bottomMargin: 50,
-  maxWidthRatio: 90
+  maxWidthRatio: 90,
+  outlineColor: '#000000',
+  outlineWidth: 1
 })
 
 // 处理选项
@@ -1697,12 +1885,31 @@ const cancelAudioMix = async () => {
 // 多音轨合成文件存储
 const multiTrackFiles = ref({
   srt: null,
-  dubbing: null
+  dubbing: null,
+  video: null
+})
+
+// 多音轨字幕样式配置
+const multiTrackSubtitleConfig = ref({
+  fontSize: 24,
+  fontColor: '#FFFFFF',
+  bold: false,
+  italic: false,
+  outline: true,
+  shadow: true,
+  bottomMargin: 50,
+  maxWidthRatio: 90,
+  outlineColor: '#000000',
+  outlineWidth: 1
 })
 
 // 多音轨合成状态
+const multiTrackStep = ref(0) // 0: 合成音轨, 1: 生成视频
 const multiTrackProcessing = ref(false)
-const multiTrackCompleted = ref(false)
+const multiTrackAudioCompleted = ref(false) // 音轨合成完成
+const multiTrackVideoProcessing = ref(false)
+const multiTrackVideoCompleted = ref(false) // 视频生成完成
+const multiTrackCompleted = ref(false) // 整个流程完成
 const multiTrackProgress = ref(0)
 const multiTrackProgressStatus = ref('')
 const multiTrackStatusMessage = ref('')
@@ -1717,9 +1924,24 @@ const multiTrackGeneratedFiles = ref({
 })
 const multiTrackAudioPreviewUrl = ref('')
 
+// 多音轨AI音频分离状态
+const multiTrackAISeparating = ref(false)
+const multiTrackAISeparationCompleted = ref(false)
+const multiTrackAISeparationTaskId = ref(null)
+
 // 计算属性：是否可以开始多音轨合成
 const canStartMultiTrackMix = computed(() => {
   return multiTrackFiles.value.srt && multiTrackFiles.value.dubbing && !multiTrackProcessing.value
+})
+
+// 计算属性：是否可以开始视频生成
+const canStartMultiTrackVideo = computed(() => {
+  return multiTrackFiles.value.video && !multiTrackVideoProcessing.value
+})
+
+// 计算属性：是否可以开始AI音频分离
+const canStartMultiTrackAISeparation = computed(() => {
+  return multiTrackFiles.value.video && !multiTrackAISeparating.value
 })
 
 // 多音轨合成处理时间
@@ -1787,24 +2009,33 @@ const pollMultiTrackStatus = async () => {
   try {
     const interval = setInterval(async () => {
       const response = await getSubtitleGenerateStatus(multiTrackTaskId.value)
-      const status = response.data.status
+      const data = response.data
+      const taskStatus = data.status
 
-      multiTrackProgress.value = status.progress || 0
-      multiTrackStatusMessage.value = status.message || '正在处理...'
+      // 调试日志
+      console.log('多音轨状态轮询:', {
+        taskStatus,
+        progress: data.progress,
+        message: data.message,
+        files: data.files
+      })
+
+      multiTrackProgress.value = data.progress || 0
+      multiTrackStatusMessage.value = data.message || '正在处理...'
 
       // 更新步骤信息
-      if (status.steps) {
-        multiTrackSteps.value = status.steps
+      if (data.steps) {
+        multiTrackSteps.value = data.steps
       }
 
-      if (status.status === 'completed') {
+      if (taskStatus === 'completed') {
         clearInterval(interval)
         multiTrackProcessing.value = false
-        multiTrackCompleted.value = true
+        multiTrackAudioCompleted.value = true
         multiTrackProgress.value = 100
 
         // 获取生成的文件
-        const files = status.files || {}
+        const files = data.files || {}
         multiTrackGeneratedFiles.value = {
           mixed_audio: files.mixed_audio,
           merged_audio: files.merged_audio,
@@ -1817,11 +2048,11 @@ const pollMultiTrackStatus = async () => {
           multiTrackAudioPreviewUrl.value = `/api/subtitle-generate/audio/${multiTrackTaskId.value}/mixed_audio?t=${Date.now()}`
         }
 
-        ElMessage.success('多音轨合成完成！')
-      } else if (status.status === 'failed') {
+        ElMessage.success('音轨合成完成！')
+      } else if (taskStatus === 'failed') {
         clearInterval(interval)
         multiTrackProcessing.value = false
-        ElMessage.error(status.message || '多音轨合成失败')
+        ElMessage.error(data.message || '多音轨合成失败')
       }
     }, 2000)
 
@@ -1840,6 +2071,7 @@ const handleMultiTrackCancel = async () => {
     await deleteSubtitleGenerateTask(multiTrackTaskId.value)
     ElMessage.success('任务已取消')
     multiTrackProcessing.value = false
+    multiTrackAudioCompleted.value = false
     multiTrackTaskId.value = null
     multiTrackSteps.value = []
   } catch (error) {
@@ -1875,6 +2107,225 @@ const downloadMultiTrackFile = async (fileType) => {
     console.error('下载失败:', error)
     ElMessage.error(error.message || '下载失败')
   }
+}
+
+// 处理多音轨AI音频分离
+const handleMultiTrackAISeparation = async () => {
+  if (!multiTrackFiles.value.video) {
+    ElMessage.warning('请先上传原视频文件')
+    return
+  }
+
+  try {
+    multiTrackAISeparating.value = true
+    multiTrackAISeparationCompleted.value = false
+
+    const formData = new FormData()
+    formData.append('video', multiTrackFiles.value.video)
+    formData.append('enable_ai_separation', 'true')
+
+    ElMessage.info('开始AI音频分离，这可能需要几分钟...')
+
+    // 调用字幕生成API（会自动进行AI分离）
+    const response = await generateSubtitleVideos(formData)
+    multiTrackAISeparationTaskId.value = response.data.task_id
+
+    // 轮询状态
+    pollMultiTrackAISeparationStatus()
+  } catch (error) {
+    console.error('AI音频分离失败:', error)
+    multiTrackAISeparating.value = false
+    ElMessage.error(error.message || 'AI音频分离失败')
+  }
+}
+
+// 轮询多音轨AI音频分离状态
+const pollMultiTrackAISeparationStatus = async () => {
+  if (!multiTrackAISeparationTaskId.value) return
+
+  try {
+    const interval = setInterval(async () => {
+      const response = await getSubtitleGenerateStatus(multiTrackAISeparationTaskId.value)
+      const data = response.data
+      const taskStatus = data.status
+
+      console.log('AI音频分离状态:', { taskStatus, progress: data.progress })
+
+      if (taskStatus === 'completed') {
+        clearInterval(interval)
+        multiTrackAISeparating.value = false
+        multiTrackAISeparationCompleted.value = true
+
+        // 获取生成的文件
+        const files = data.files || {}
+        multiTrackGeneratedFiles.value = {
+          ...multiTrackGeneratedFiles.value,
+          vocals: files.vocals,
+          no_vocals: files.no_vocals
+        }
+
+        ElMessage.success('AI音频分离完成！')
+      } else if (taskStatus === 'failed') {
+        clearInterval(interval)
+        multiTrackAISeparating.value = false
+        ElMessage.error(data.message || 'AI音频分离失败')
+      }
+    }, 3000)
+  } catch (error) {
+    console.error('获取AI分离状态失败:', error)
+    multiTrackAISeparating.value = false
+    ElMessage.error('获取状态失败')
+  }
+}
+
+// 下载多音轨AI分离结果
+const downloadMultiTrackAISeparatedFiles = async () => {
+  if (!multiTrackAISeparationTaskId.value) {
+    ElMessage.warning('任务不存在')
+    return
+  }
+
+  try {
+    // 下载伴奏
+    if (multiTrackGeneratedFiles.value.no_vocals) {
+      await downloadSubtitleVideo(multiTrackAISeparationTaskId.value, 'no_vocals')
+    }
+    // 下载人声
+    if (multiTrackGeneratedFiles.value.vocals) {
+      await downloadSubtitleVideo(multiTrackAISeparationTaskId.value, 'vocals')
+    }
+    ElMessage.success('下载成功')
+  } catch (error) {
+    console.error('下载失败:', error)
+    ElMessage.error(error.message || '下载失败')
+  }
+}
+
+// 处理多音轨视频生成
+const handleMultiTrackVideoMix = async () => {
+  if (!multiTrackFiles.value.video) {
+    ElMessage.warning('请先上传原视频文件')
+    return
+  }
+
+  try {
+    multiTrackVideoProcessing.value = true
+
+    const formData = new FormData()
+    formData.append('video', multiTrackFiles.value.video)
+    formData.append('srt', multiTrackFiles.value.srt)
+    formData.append('audio_only', 'false') // 完整视频模式
+
+    // 添加字幕配置
+    formData.append('subtitle_config', JSON.stringify({
+      fontSize: multiTrackSubtitleConfig.value.fontSize,
+      fontColor: multiTrackSubtitleConfig.value.fontColor,
+      bold: multiTrackSubtitleConfig.value.bold,
+      italic: multiTrackSubtitleConfig.value.italic,
+      outline: multiTrackSubtitleConfig.value.outline,
+      shadow: multiTrackSubtitleConfig.value.shadow,
+      bottomMargin: multiTrackSubtitleConfig.value.bottomMargin,
+      maxWidthRatio: multiTrackSubtitleConfig.value.maxWidthRatio,
+      outlineColor: multiTrackSubtitleConfig.value.outlineColor,
+      outline: multiTrackSubtitleConfig.value.outlineWidth
+    }))
+
+    const response = await generateSubtitleVideos(formData)
+    multiTrackTaskId.value = response.data.task_id
+
+    ElMessage.success('任务已创建')
+
+    // 轮询状态
+    pollMultiTrackVideoStatus()
+  } catch (error) {
+    console.error('创建任务失败:', error)
+    multiTrackVideoProcessing.value = false
+    ElMessage.error(error.message || '创建任务失败')
+  }
+}
+
+// 轮询多音轨视频生成状态
+const pollMultiTrackVideoStatus = async () => {
+  if (!multiTrackTaskId.value) return
+
+  try {
+    const response = await getSubtitleGenerateStatus(multiTrackTaskId.value)
+    const status = response.data
+
+    if (status.status === 'completed') {
+      multiTrackVideoProcessing.value = false
+      multiTrackVideoCompleted.value = true
+      multiTrackCompleted.value = true
+
+      ElMessage.success('视频生成完成')
+    } else if (status.status === 'failed') {
+      multiTrackVideoProcessing.value = false
+      ElMessage.error(status.error || '视频生成失败')
+    } else {
+      // 继续轮询
+      setTimeout(pollMultiTrackVideoStatus, 2000)
+    }
+  } catch (error) {
+    console.error('获取状态失败:', error)
+    multiTrackVideoProcessing.value = false
+    ElMessage.error('获取状态失败')
+  }
+}
+
+// 下载多音轨视频
+const downloadMultiTrackVideo = async (type) => {
+  if (!multiTrackTaskId.value) {
+    ElMessage.warning('任务不存在')
+    return
+  }
+
+  try {
+    await downloadSubtitleVideo(multiTrackTaskId.value, type)
+    ElMessage.success('下载成功')
+  } catch (error) {
+    console.error('下载失败:', error)
+    ElMessage.error(error.message || '下载失败')
+  }
+}
+
+// 重置多音轨合成
+const resetMultiTrack = () => {
+  multiTrackStep.value = 0
+  multiTrackFiles.value = {
+    srt: null,
+    dubbing: null,
+    video: null
+  }
+  multiTrackSubtitleConfig.value = {
+    fontSize: 24,
+    fontColor: '#FFFFFF',
+    bold: false,
+    italic: false,
+    outline: true,
+    shadow: true,
+    bottomMargin: 50,
+    maxWidthRatio: 90,
+    outlineColor: '#000000',
+    outlineWidth: 1
+  }
+  multiTrackProcessing.value = false
+  multiTrackAudioCompleted.value = false
+  multiTrackVideoProcessing.value = false
+  multiTrackVideoCompleted.value = false
+  multiTrackCompleted.value = false
+  multiTrackProgress.value = 0
+  multiTrackProgressStatus.value = ''
+  multiTrackStatusMessage.value = ''
+  multiTrackTaskId.value = null
+  multiTrackStartTime.value = null
+  multiTrackSteps.value = []
+  multiTrackGeneratedFiles.value = {
+    mixed_audio: null,
+    merged_audio: null,
+    vocals: null,
+    no_vocals: null
+  }
+  multiTrackAudioPreviewUrl.value = ''
 }
 
 // 步骤状态处理函数

@@ -642,6 +642,9 @@ class VideoRecomposer:
         primary_color = self._parse_color(style.get('primary_colour', '&HFFFFFF'))
         outline_color = self._parse_color(style.get('outline_colour', '&H000000'))
 
+        # 获取字幕宽度配置（默认90%）
+        max_width_ratio = style.get('max_width_ratio', 90) / 100.0
+
         video_width = video_clip.w
         video_height = video_clip.h
 
@@ -675,8 +678,8 @@ class VideoRecomposer:
             temp_img = Image.new('RGBA', (1, 1), (255, 255, 255, 0))
             temp_draw = ImageDraw.Draw(temp_img)
 
-            # 计算最大宽度（视频宽度的90%）
-            max_width = int(video_width * 0.9)
+            # 计算最大宽度（使用配置的比例）
+            max_width = int(video_width * max_width_ratio)
 
             # 自动换行
             lines = self._wrap_text(text, font, temp_draw, max_width)
