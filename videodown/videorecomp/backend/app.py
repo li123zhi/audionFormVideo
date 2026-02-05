@@ -406,7 +406,26 @@ def subtitle_generate_upload():
         # 检查是否为纯AI音频分离模式（只需要视频，不需要字幕）
         ai_separation_only = request.form.get('ai_separation_only', 'false').lower() == 'true'
 
+        # 检查是否为一键式工作流模式
+        one_click_workflow = request.form.get('one_click_workflow', 'false').lower() == 'true'
+
+        # 检查是否需要与之前的mixed_audio合并
+        merge_with_mixed_audio = request.form.get('merge_with_mixed_audio', 'false').lower() == 'true'
+        audio_mix_task_id = request.form.get('audio_mix_task_id', None)
+
         # 检查必需文件
+        if not audio_only and not ai_separation_only and not one_click_workflow:
+            if 'srt' not in request.files:
+                return jsonify({'error': '缺少字幕文件'}), 400
+
+        # 一键式工作流需要所有文件
+        if one_click_workflow:
+            if 'srt' not in request.files:
+                return jsonify({'error': '缺少字幕文件'}), 400
+            if 'video' not in request.files:
+                return jsonify({'error': '缺少视频文件'}), 400
+            if 'audio' not in request.files:
+                return jsonify({'error': '缺少配音音频文件'}), 400
         if not audio_only and not ai_separation_only:
             if 'srt' not in request.files:
                 return jsonify({'error': '缺少字幕文件'}), 400
@@ -537,7 +556,15 @@ def subtitle_generate_upload():
             ]
 
             # 根据选项调整步骤
-            if not enable_ai_separation and not audio_zip_path:
+            if one_click_workflow:
+                # 一键式工作流：合成配音 -> AI分离 -> 合并音轨 -> 生成视频
+                steps = [
+                    {'id': 1, 'name': '合成配音音轨', 'status': 'pending', 'message': '等待开始...'},
+                    {'id': 2, 'name': 'AI智能分离原视频音轨', 'status': 'pending', 'message': '等待开始...'},
+                    {'id': 3, 'name': '合并配音与伴奏', 'status': 'pending', 'message': '等待开始...'},
+                    {'id': 4, 'name': '生成最终视频', 'status': 'pending', 'message': '等待开始...'}
+                ]
+            elif not enable_ai_separation and not audio_zip_path:
                 # 没有AI分离，没有配音，只生成视频
                 steps = [
                     {'id': 1, 'name': '生成不带字幕视频', 'status': 'pending', 'message': '等待开始...'},
@@ -568,6 +595,7 @@ def subtitle_generate_upload():
                 'generate_no_subtitle': generate_no_subtitle,
                 'audio_only': audio_only,
                 'ai_separation_only': ai_separation_only,
+                'one_click_workflow': one_click_workflow,
                 'output_dir': output_dir,
                 'steps': steps,
                 'current_step': 0,
@@ -580,7 +608,7 @@ def subtitle_generate_upload():
         thread = threading.Thread(
             target=process_subtitle_generate_task_v2,
             args=(task_id, video_path, srt_path, output_dir, subtitle_config,
-                  original_srt_path, audio_zip_path, enable_ai_separation, generate_no_subtitle, audio_only, ai_separation_only)
+                  original_srt_path, audio_zip_path, enable_ai_separation, generate_no_subtitle, audio_only, ai_separation_only, one_click_workflow)
         )
         thread.daemon = True
         logger.info(f"   线程对象已创建，准备启动...")
@@ -671,7 +699,7 @@ def process_subtitle_generate_task(task_id, video_path, srt_path, output_dir, su
 
 def process_subtitle_generate_task_v2(task_id, video_path, srt_path, output_dir,
                                      subtitle_config, original_srt_path, audio_zip_path,
-                                     enable_ai_separation, generate_no_subtitle, audio_only, ai_separation_only):
+                                     enable_ai_separation, generate_no_subtitle, audio_only, ai_separation_only, one_click_workflow=False):
     """处理字幕生成任务（后台线程）- 使用video_processor的完整版本"""
     logger.info(f"🚀 [线程启动] 开始处理完整字幕生成任务 {task_id}")
 
@@ -692,6 +720,7 @@ def process_subtitle_generate_task_v2(task_id, video_path, srt_path, output_dir,
         logger.info(f"   audio_zip_path={audio_zip_path}")
         logger.info(f"   enable_ai_separation={enable_ai_separation}")
         logger.info(f"   generate_no_subtitle={generate_no_subtitle}")
+        logger.info(f"   one_click_workflow={one_click_workflow}")
 
         # 转换字幕样式配置
         video_processor_style = {}
@@ -712,11 +741,20 @@ def process_subtitle_generate_task_v2(task_id, video_path, srt_path, output_dir,
         logger.info(f"   audio_zip_for_processor={audio_zip_for_processor}")
 
         # 根据模式选择处理流程
-        if ai_separation_only:
+        if one_click_workflow:
+            # 一键式工作流：合成配音 -> AI分离 -> 合并音轨 -> 生成视频
+            logger.info(f"   一键式工作流模式")
+            result = _process_one_click_workflow(
+                task_id, video_path, srt_path, audio_zip_path, output_dir,
+                video_processor_style
+            )
+        elif ai_separation_only:
             # 纯AI音频分离模式：只需要视频，进行AI分离
             logger.info(f"   纯AI音频分离模式，只分离人声和伴奏")
+            if merge_with_mixed_audio:
+                logger.info(f"   将在AI分离后与mixed_audio合并")
             result = _process_ai_separation_only(
-                task_id, video_path, output_dir
+                task_id, video_path, output_dir, merge_with_mixed_audio, audio_mix_task_id
             )
         elif not audio_zip_path:
             logger.info(f"   没有配音文件，使用简化处理流程")
@@ -866,17 +904,24 @@ def update_subtitle_task_status(task_id, status, progress, message):
 
             # 更新步骤状态
             if 'steps' in task and task['steps']:
-                # 根据进度确定当前步骤
                 step_count = len(task['steps'])
-                current_step_index = int((progress / 100) * (step_count - 1))
+                current_step_index = int((progress / 100) * step_count)
+                # 确保不超过最大索引
+                current_step_index = min(current_step_index, step_count - 1)
+
                 for i, step in enumerate(task['steps']):
                     if i < current_step_index:
                         step['status'] = 'completed'
+                        step['progress'] = 100
                     elif i == current_step_index:
                         step['status'] = 'processing'
                         step['message'] = message
+                        # 计算当前步骤的进度
+                        step_progress = int((progress - (i * 100 / step_count)) / (100 / step_count) * 100)
+                        step['progress'] = max(0, min(100, step_progress))
                     else:
                         step['status'] = 'pending'
+                        step['progress'] = 0
 
 
 @app.route('/api/subtitle-generate/status/<task_id>', methods=['GET'])
@@ -937,6 +982,8 @@ def subtitle_generate_download(task_id, type):
             - mixed_audio: 伴奏混合音频
             - vocals: 人声
             - no_vocals: 伴奏
+            - merged_with_vocals: 配音+伴奏合并音频
+            - new_audio: 一键式工作流生成的最终音轨（配音+伴奏）
     """
     with subtitle_tasks_lock:
         task = subtitle_tasks.get(task_id)
@@ -957,7 +1004,9 @@ def subtitle_generate_download(task_id, type):
             'merged_audio': task.get('files', {}).get('merged_audio'),
             'mixed_audio': task.get('files', {}).get('mixed_audio'),
             'vocals': task.get('files', {}).get('vocals'),
-            'no_vocals': task.get('files', {}).get('no_vocals')
+            'no_vocals': task.get('files', {}).get('no_vocals'),
+            'merged_with_vocals': task.get('files', {}).get('merged_with_vocals'),
+            'new_audio': task.get('files', {}).get('new_audio')
         }
 
         file_path = file_mapping.get(type)
@@ -993,7 +1042,220 @@ def subtitle_generate_delete_task(task_id):
         return jsonify({'message': '任务已删除'})
 
 
-def _process_ai_separation_only(task_id, video_path, output_dir):
+def _process_one_click_workflow(task_id, video_path, srt_path, audio_zip_path, output_dir, subtitle_style):
+    """处理一键式工作流
+
+    完整流程：
+    1. 根据字幕和配音合成mixed_audio
+    2. AI分离原视频音轨为人声和伴奏
+    3. 合并伴奏+mixed_audio = new_audio
+    4. 将原视频的音轨替换为new_audio并添加字幕生成最终视频
+
+    Args:
+        task_id: 任务ID
+        video_path: 原视频文件路径
+        srt_path: 字幕文件路径
+        audio_zip_path: 配音ZIP文件路径
+        output_dir: 输出目录
+        subtitle_style: 字幕样式配置
+
+    Returns:
+        dict: 包含所有生成的文件路径
+    """
+    import subprocess
+    from pathlib import Path
+
+    result = {}
+    video_name = Path(video_path).stem
+
+    try:
+        # ========== 步骤1: 合成配音音轨 (0-25%) ==========
+        update_subtitle_task_status(task_id, 'processing', 0, '正在合成配音音轨...')
+        logger.info(f"📝 [步骤1/4] 合成配音音轨")
+
+        # 调用纯音频合成函数
+        step1_result = _process_audio_only_simple(task_id, srt_path, output_dir, audio_zip_path)
+
+        if 'mixed_audio' not in step1_result or not step1_result['mixed_audio']:
+            raise Exception("步骤1失败：无法合成配音音轨")
+
+        mixed_audio_path = step1_result['mixed_audio']
+        result['mixed_audio'] = mixed_audio_path
+        logger.info(f"   ✅ 配音音轨合成完成: {mixed_audio_path}")
+        update_subtitle_task_status(task_id, 'processing', 25, '配音音轨合成完成')
+
+        # ========== 步骤2: AI智能分离原视频音轨 (25-50%) ==========
+        update_subtitle_task_status(task_id, 'processing', 25, '正在进行AI音频分离...')
+        logger.info(f"🎵 [步骤2/4] AI智能分离原视频音轨")
+
+        # 从视频提取音频
+        update_subtitle_task_status(task_id, 'processing', 27, '正在提取原视频音轨...')
+        extracted_audio = os.path.join(output_dir, f"{video_name}_original.mp3")
+        cmd = [
+            'ffmpeg', '-y',
+            '-i', video_path,
+            '-vn',
+            '-acodec', 'libmp3lame',
+            '-q:a', '2',
+            '-b:a', '192k',
+            extracted_audio
+        ]
+        subprocess.run(cmd, capture_output=True, check=True)
+        logger.info(f"   ✅ 原视频音轨提取完成: {extracted_audio}")
+
+        # AI分离人声和伴奏
+        update_subtitle_task_status(task_id, 'processing', 30, '正在进行AI音频分离...')
+        success = separate_vocals_accompaniment(extracted_audio, output_dir)
+
+        if not success:
+            raise Exception("步骤2失败：AI音频分离失败")
+
+        vocals_path = os.path.join(output_dir, 'vocals.wav')
+        no_vocals_path = os.path.join(output_dir, 'no_vocals.wav')
+
+        if not os.path.exists(vocals_path) or not os.path.exists(no_vocals_path):
+            raise Exception("步骤2失败：无法找到分离的音频文件")
+
+        result['vocals'] = vocals_path
+        result['no_vocals'] = no_vocals_path
+        logger.info(f"   ✅ AI分离完成")
+        logger.info(f"      人声: {vocals_path}")
+        logger.info(f"      伴奏: {no_vocals_path}")
+        update_subtitle_task_status(task_id, 'processing', 50, 'AI音频分离完成')
+
+        # ========== 步骤3: 合并配音与伴奏 (50-75%) ==========
+        update_subtitle_task_status(task_id, 'processing', 50, '正在合并配音与伴奏...')
+        logger.info(f"🎼 [步骤3/4] 合并配音与伴奏")
+
+        new_audio_path = os.path.join(output_dir, 'new_audio.mp3')
+
+        # 使用FFmpeg合并mixed_audio和no_vocals
+        cmd = [
+            'ffmpeg', '-y',
+            '-i', mixed_audio_path,
+            '-i', no_vocals_path,
+            '-filter_complex', '[0:a][1:a]amix=inputs=2:duration=longest:normalize=0',
+            '-acodec', 'libmp3lame',
+            '-q:a', '2',
+            '-b:a', '192k',
+            new_audio_path
+        ]
+
+        update_subtitle_task_status(task_id, 'processing', 60, '正在混合音轨...')
+        merge_result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if merge_result.returncode != 0:
+            logger.error(f"   ❌ 音轨合并失败: {merge_result.stderr}")
+            raise Exception("步骤3失败：音轨合并失败")
+
+        result['new_audio'] = new_audio_path
+        logger.info(f"   ✅ 音轨合并完成: {new_audio_path}")
+        update_subtitle_task_status(task_id, 'processing', 75, '音轨合并完成')
+
+        # ========== 步骤4: 生成最终视频 (75-100%) ==========
+        update_subtitle_task_status(task_id, 'processing', 75, '正在生成最终视频...')
+        logger.info(f"🎬 [步骤4/4] 生成最终视频")
+
+        try:
+            # 步骤4.1: 先替换原视频的音轨为new_audio.mp3
+            update_subtitle_task_status(task_id, 'processing', 77, '正在替换原视频音轨...')
+
+            video_name = Path(video_path).stem
+            temp_video_with_new_audio = os.path.join(output_dir, f"{video_name}_with_new_audio.mp4")
+
+            cmd = [
+                'ffmpeg', '-y',
+                '-i', video_path,
+                '-i', new_audio_path,
+                '-map', '0:v:0',      # 使用原视频的视频流
+                '-map', '1:a:0',      # 使用new_audio的音频流
+                '-c:v', 'copy',      # 视频流直接复制，不重新编码
+                '-c:a', 'aac',       # 音频编码为AAC
+                '-b:a', '192k',      # 音频比特率192kbps
+                '-shortest',        # 以最短的流为准
+                temp_video_with_new_audio
+            ]
+            subprocess.run(cmd, capture_output=True, check=True)
+            logger.info(f"   ✅ 原视频音轨替换完成: {temp_video_with_new_audio}")
+
+            # 步骤4.2: 使用新音频视频生成软字幕视频
+            update_subtitle_task_status(task_id, 'processing', 82, '正在生成软字幕视频...')
+
+            final_soft_video = os.path.join(output_dir, f"{video_name}_new_soft.mp4")
+            cmd = [
+                'ffmpeg', '-y',
+                '-i', temp_video_with_new_audio,
+                '-i', srt_path,
+                '-c', 'copy',
+                '-c:s', 'mov_text',
+                '-metadata:s:s:0', 'language=chi',
+                '-movflags', '+faststart',
+                final_soft_video
+            ]
+            subprocess.run(cmd, capture_output=True, check=True)
+            result['new_soft_subtitle'] = final_soft_video
+            logger.info(f"   ✅ 软字幕视频生成完成: {final_soft_video}")
+
+            # 步骤4.3: 使用新音频视频生成硬字幕视频
+            update_subtitle_task_status(task_id, 'processing', 90, '正在生成硬字幕视频...')
+
+            final_hard_video = os.path.join(output_dir, f"{video_name}_new_hard.mp4")
+
+            # 直接使用moviepy生成硬字幕视频
+            from moviepy.editor import VideoFileClip
+            from src.subtitle_processor import SubtitleProcessor
+            from moviepy.video.compositing.CompositeVideoClip import CompositeVideoClip
+
+            # 创建字幕处理器
+            subtitle_processor = SubtitleProcessor(srt_path)
+            subtitles_data = subtitle_processor.to_moviepy_format()
+
+            # 创建视频剪辑
+            video_clip = VideoFileClip(temp_video_with_new_audio)
+
+            # 创建字幕剪辑
+            subtitle_clips = _create_subtitle_clips_for_video(video_clip, subtitles_data, subtitle_style)
+
+            # 合成视频和字幕
+            final_with_subtitle = CompositeVideoClip([video_clip] + subtitle_clips)
+
+            # 写入视频
+            final_with_subtitle.write_videofile(
+                final_hard_video,
+                codec='libx264',
+                audio_codec='aac',
+                temp_audiofile=os.path.join(output_dir, 'temp_audio.m4a'),
+                remove_temp=True
+            )
+
+            video_clip.close()
+            final_with_subtitle.close()
+
+            result['new_hard_subtitle'] = final_hard_video
+            logger.info(f"   ✅ 硬字幕视频生成完成: {final_hard_video}")
+
+            # 删除临时视频文件
+            if os.path.exists(temp_video_with_new_audio):
+                os.remove(temp_video_with_new_audio)
+
+            update_subtitle_task_status(task_id, 'processing', 100, '视频生成完成')
+
+        except Exception as e:
+            logger.error(f"   ❌ 步骤4失败: {e}")
+            raise e
+
+        logger.info(f"✅ 一键式工作流全部完成")
+        return result
+
+    except Exception as e:
+        logger.error(f"❌ 一键式工作流失败: {e}")
+        import traceback
+        traceback.print_exc()
+        update_subtitle_task_status(task_id, 'failed', 0, f'工作流失败: {str(e)}')
+        return result
+
+
+def _process_ai_separation_only(task_id, video_path, output_dir, merge_with_mixed_audio=False, audio_mix_task_id=None):
     """处理纯AI音频分离（只需要视频文件）
 
     从视频提取音轨，使用Demucs分离人声和伴奏
@@ -1002,6 +1264,8 @@ def _process_ai_separation_only(task_id, video_path, output_dir):
         task_id: 任务ID
         video_path: 视频文件路径
         output_dir: 输出目录
+        merge_with_mixed_audio: 是否与之前的mixed_audio合并
+        audio_mix_task_id: 之前音轨合成的任务ID
 
     Returns:
         dict: 包含生成的文件路径
@@ -1046,7 +1310,56 @@ def _process_ai_separation_only(task_id, video_path, output_dir):
                 logger.info(f"   ✅ AI分离完成")
                 logger.info(f"      人声: {vocals_path}")
                 logger.info(f"      伴奏: {no_vocals_path}")
-                update_subtitle_task_status(task_id, 'processing', 100, 'AI音频分离完成')
+
+                # 3. 如果需要与之前的mixed_audio合并
+                if merge_with_mixed_audio and audio_mix_task_id:
+                    update_subtitle_task_status(task_id, 'processing', 70, '正在合并配音与伴奏...')
+
+                    # 查找之前任务的mixed_audio文件
+                    # 文件通常在 audio_segments 目录下，文件名为 mixed_audio.mp3
+                    mixed_audio_path = None
+
+                    # 尝试从任务输出目录查找
+                    possible_paths = [
+                        os.path.join(output_dir, 'mixed_audio.mp3'),
+                        os.path.join('output', 'audio_segments', audio_mix_task_id[:8], 'mixed_audio.mp3'),
+                        os.path.join('output/audio_segments', audio_mix_task_id[:8], 'mixed_audio.mp3'),
+                    ]
+
+                    for path in possible_paths:
+                        if os.path.exists(path):
+                            mixed_audio_path = path
+                            break
+
+                    if mixed_audio_path and os.path.exists(mixed_audio_path):
+                        # 合并 mixed_audio.mp3 和 no_vocals.wav
+                        merged_output_path = os.path.join(output_dir, 'merged_with_vocals.mp3')
+
+                        cmd = [
+                            'ffmpeg', '-y',
+                            '-i', mixed_audio_path,
+                            '-i', no_vocals_path,
+                            '-filter_complex', '[0:a][1:a]amix=inputs=2:duration=longest:normalize=0',
+                            '-acodec', 'libmp3lame',
+                            '-q:a', '2',
+                            '-b:a', '192k',
+                            merged_output_path
+                        ]
+
+                        merge_result = subprocess.run(cmd, capture_output=True, text=True)
+                        if merge_result.returncode == 0:
+                            result['merged_with_vocals'] = merged_output_path
+                            logger.info(f"   ✅ 合并完成: {merged_output_path}")
+                            update_subtitle_task_status(task_id, 'processing', 100, 'AI音频分离与合并完成')
+                        else:
+                            logger.warning(f"   ⚠️ 合并失败: {merge_result.stderr}")
+                            logger.info(f"   ℹ️ 继续返回分离的音频文件")
+                            update_subtitle_task_status(task_id, 'processing', 100, 'AI音频分离完成（合并失败）')
+                    else:
+                        logger.warning(f"   ⚠️ 找不到mixed_audio文件，跳过合并")
+                        update_subtitle_task_status(task_id, 'processing', 100, 'AI音频分离完成')
+                else:
+                    update_subtitle_task_status(task_id, 'processing', 100, 'AI音频分离完成')
             else:
                 # 如果找不到，列出目录内容帮助调试
                 logger.error(f"   ❌ 无法找到生成的文件")
@@ -2105,7 +2418,10 @@ def separate_vocals_accompaniment(audio_path: str, output_dir: str) -> bool:
                     other_path = os.path.join(output_dir, 'other.wav')
 
                     if all(os.path.exists(p) for p in [drums_path, bass_path, other_path]):
-                        # 使用 ffmpeg 混合三个音轨，保持原始音量
+                        # 使用 ffmpeg 混合三个音轨，并提升音量
+                        no_vocals_temp = os.path.join(output_dir, 'no_vocals_temp.wav')
+
+                        # 第一步：混合音轨
                         cmd = [
                             'ffmpeg', '-y',
                             '-i', drums_path,
@@ -2113,14 +2429,31 @@ def separate_vocals_accompaniment(audio_path: str, output_dir: str) -> bool:
                             '-i', other_path,
                             '-filter_complex', '[0:a][1:a][2:a]amix=inputs=3:duration=longest:normalize=0',
                             '-loglevel', 'error',
-                            no_vocals_path
+                            no_vocals_temp
                         ]
 
                         result = subprocess.run(cmd, capture_output=True, text=True)
-                        if result.returncode == 0:
-                            logger.info(f"   ✅ 伴奏生成成功: no_vocals.wav")
+                        if result.returncode != 0:
+                            logger.error(f"   ❌ 伴奏混合失败: {result.stderr}")
+                            return False
+
+                        # 第二步：提升音量到 1.5 倍
+                        cmd2 = [
+                            'ffmpeg', '-y',
+                            '-i', no_vocals_temp,
+                            '-filter_complex', '[0:a]volume=1.5',
+                            '-loglevel', 'error',
+                            no_vocals_path
+                        ]
+
+                        result2 = subprocess.run(cmd2, capture_output=True, text=True)
+                        if result2.returncode == 0:
+                            logger.info(f"   ✅ 伴奏生成成功: no_vocals.wav (音量已提升1.5倍)")
+                            # 删除临时文件
+                            if os.path.exists(no_vocals_temp):
+                                os.remove(no_vocals_temp)
                         else:
-                            logger.error(f"   ❌ 伴奏生成失败: {result.stderr}")
+                            logger.error(f"   ❌ 伴奏音量调整失败: {result2.stderr}")
                             return False
                     else:
                         logger.error(f"   ❌ 缺少必要的音轨文件")

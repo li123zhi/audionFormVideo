@@ -759,6 +759,96 @@ class VideoRecomposer:
 
         return subtitle_clips
 
+    def _process_with_original_audio(self) -> dict:
+        """
+        使用原视频音频生成带字幕的视频
+
+        当没有提供配音文件时，使用此方法直接生成带字幕的视频
+
+        Returns:
+            包含所有生成文件路径的字典
+        """
+        # 1. 加载新字幕
+        print("加载新字幕文件...")
+        self.subtitle_processor = SubtitleProcessor(self.srt_file)
+        print(f"新字幕加载完成，共 {self.subtitle_processor.get_subtitle_count()} 条")
+
+        # 1.1 加载原字幕（如果存在）
+        if self.original_srt_file and os.path.exists(self.original_srt_file):
+            print("加载原字幕文件...")
+            self.original_subtitle_processor = SubtitleProcessor(self.original_srt_file)
+            print(f"原字幕加载完成，共 {self.original_subtitle_processor.get_subtitle_count()} 条")
+
+        # 2. 加载视频
+        print("\n加载视频...")
+        print(f"使用原视频: {self.original_video}")
+
+        # 3. 根据字幕时间剪辑视频（如果启用）
+        if self.auto_clip_video and self.original_srt_file:
+            clipped_video_path = self._clip_video_by_subtitle_times(
+                os.path.join(self.temp_dir, 'auto_clipped_video.mp4')
+            )
+            video_to_process = clipped_video_path
+            print(f"使用剪辑后的视频: {video_to_process}")
+        else:
+            video_to_process = self.original_video
+
+        original_clip = VideoFileClip(video_to_process)
+
+        # 结果字典
+        result = {}
+
+        # 4. 生成新字幕版本
+        print("\n生成新字幕版本...")
+
+        # 4.1 生成新字幕软字幕视频
+        new_soft_subtitle_path = os.path.join(self.output_dir, "output_new_soft_subtitle.mp4")
+        cmd = [
+            'ffmpeg', '-y',
+            '-i', video_to_process,
+            '-i', self.srt_file,
+            '-c', 'copy',
+            '-c:s', 'mov_text',
+            '-metadata:s:s:0', 'language=chi',
+            '-movflags', '+faststart',
+            new_soft_subtitle_path
+        ]
+        try:
+            subprocess.run(cmd, capture_output=True, check=True)
+            print(f"✅ 新字幕软字幕视频已生成: {new_soft_subtitle_path}")
+            result['new_soft_subtitle'] = new_soft_subtitle_path
+        except subprocess.CalledProcessError as e:
+            print(f"⚠️  新字幕软字幕视频生成失败: {e}")
+            result['new_soft_subtitle'] = video_to_process
+
+        # 4.2 生成新字幕硬字幕视频
+        print("生成新字幕硬字幕视频...")
+        new_hard_subtitle_path = os.path.join(self.output_dir, "output_new_hard_subtitle.mp4")
+        subtitles_data = self.subtitle_processor.to_moviepy_format()
+        subtitle_clips = self._create_subtitle_clips(original_clip, subtitles_data)
+        final_with_subtitle = CompositeVideoClip([original_clip] + subtitle_clips)
+
+        final_with_subtitle.write_videofile(
+            new_hard_subtitle_path,
+            codec='libx264',
+            audio_codec='aac',
+            temp_audiofile=os.path.join(self.temp_dir, 'temp_audio_new_hard_sub.m4a'),
+            remove_temp=True
+        )
+        print(f"✅ 新字幕硬字幕视频已生成: {new_hard_subtitle_path}")
+        result['new_hard_subtitle'] = new_hard_subtitle_path
+
+        # 如果进行了视频剪辑，保存剪辑后的视频路径
+        if self.auto_clip_video and self.original_srt_file and video_to_process != self.original_video:
+            result['clipped_video'] = video_to_process
+
+        original_clip.close()
+        if 'final_with_subtitle' in locals():
+            final_with_subtitle.close()
+
+        print("\n✅ 视频生成完成（使用原视频音频）")
+        return result
+
     def _clip_video_by_subtitle_times(self, output_path: str) -> str:
         """
         根据原字幕和新字幕的时间对比，智能剪辑原视频
@@ -912,6 +1002,12 @@ class VideoRecomposer:
         Returns:
             包含所有生成文件路径的字典
         """
+        # 检查是否有配音文件
+        if not self.audio_zip:
+            print("没有提供配音文件，将使用原视频音频生成带字幕的视频")
+            # 直接生成带字幕的视频（使用原视频音频）
+            return self._process_with_original_audio()
+
         # 0. 提取原视频音轨（默认执行）
         _, first_audio_path = self.extract_all_audio_tracks()
 
@@ -1184,7 +1280,7 @@ def create_video_recomposer(
         raise FileNotFoundError(f"原视频文件不存在: {original_video}")
     if not os.path.exists(srt_file):
         raise FileNotFoundError(f"新字幕文件不存在: {srt_file}")
-    if not os.path.exists(audio_zip):
+    if audio_zip and not os.path.exists(audio_zip):
         raise FileNotFoundError(f"配音ZIP文件不存在: {audio_zip}")
     if original_srt_file and not os.path.exists(original_srt_file):
         raise FileNotFoundError(f"原字幕文件不存在: {original_srt_file}")
