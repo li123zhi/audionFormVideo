@@ -391,6 +391,7 @@ def subtitle_generate_upload():
         - subtitle_config: 字幕样式配置（JSON字符串，可选）
         - enable_ai_separation: 是否启用AI音频分离（可选，默认false）
         - generate_no_subtitle: 是否生成不带字幕的视频（可选，默认true）
+        - ai_separation_only: 仅进行AI音频分离，不需要字幕（可选，默认false）
 
     Response:
         - task_id: 任务ID
@@ -402,15 +403,24 @@ def subtitle_generate_upload():
         # 检查是否为纯音频合成模式（不需要视频）
         audio_only = request.form.get('audio_only', 'false').lower() == 'true'
 
+        # 检查是否为纯AI音频分离模式（只需要视频，不需要字幕）
+        ai_separation_only = request.form.get('ai_separation_only', 'false').lower() == 'true'
+
         # 检查必需文件
-        if 'srt' not in request.files:
-            return jsonify({'error': '缺少字幕文件'}), 400
+        if not audio_only and not ai_separation_only:
+            if 'srt' not in request.files:
+                return jsonify({'error': '缺少字幕文件'}), 400
 
-        srt = request.files['srt']
+        srt = request.files.get('srt')
 
-        # 视频文件：仅在非纯音频模式下必需
+        # 视频文件：在非纯音频合成模式下必需
         video = request.files.get('video')
-        if not audio_only and not video:
+        # audio_only模式不需要视频，只需要字幕和配音
+        # ai_separation_only模式需要视频
+        # 其他模式也需要视频
+        if ai_separation_only and not video:
+            return jsonify({'error': '缺少视频文件'}), 400
+        if not audio_only and not ai_separation_only and not video:
             return jsonify({'error': '缺少视频文件'}), 400
 
         # 获取可选文件
@@ -433,7 +443,7 @@ def subtitle_generate_upload():
         generate_no_subtitle = request.form.get('generate_no_subtitle', 'true').lower() == 'true'
 
         # 检查文件名
-        if srt.filename == '':
+        if srt and srt.filename == '':
             return jsonify({'error': '字幕文件名为空'}), 400
         if video and video.filename == '':
             return jsonify({'error': '视频文件名为空'}), 400
@@ -445,10 +455,12 @@ def subtitle_generate_upload():
         task_dir = os.path.join(TASKS_FOLDER, f'subtitle_{task_id}')
         os.makedirs(task_dir, exist_ok=True)
 
-        # 保存字幕文件
-        srt_path = os.path.join(task_dir, srt.filename)
-        srt.save(srt_path)
-        logger.info(f"字幕文件: {srt.filename}")
+        # 保存字幕文件（如果有）
+        srt_path = None
+        if srt and srt.filename:
+            srt_path = os.path.join(task_dir, srt.filename)
+            srt.save(srt_path)
+            logger.info(f"字幕文件: {srt.filename}")
 
         # 保存视频（如果有）
         video_path = None
@@ -457,7 +469,12 @@ def subtitle_generate_upload():
             video.save(video_path)
             logger.info(f"视频文件: {video.filename}")
         else:
-            logger.info("无视频文件（纯音频合成模式）")
+            if audio_only:
+                logger.info("无视频文件（纯音频合成模式）")
+            elif ai_separation_only:
+                logger.info("无视频文件")
+            else:
+                logger.info("无视频文件")
 
         # 保存原字幕（如果提供）
         original_srt_path = None
@@ -480,19 +497,29 @@ def subtitle_generate_upload():
         logger.info(f"任务ID: {task_id}")
         if video and video.filename:
             logger.info(f"视频: {video.filename} ({os.path.getsize(video_path) / 1024 / 1024:.2f} MB)")
-        logger.info(f"字幕: {srt.filename}")
+        if srt and srt.filename:
+            logger.info(f"字幕: {srt.filename}")
         logger.info(f"AI分离: {enable_ai_separation}")
         logger.info(f"生成无字幕视频: {generate_no_subtitle}")
         logger.info(f"💾 本地模式：文件保存在本地")
         if video_path:
             logger.info(f"   - 视频路径: {video_path}")
-        logger.info(f"   - 字幕路径: {srt_path}")
+        if srt_path:
+            logger.info(f"   - 字幕路径: {srt_path}")
         if audio_zip_path:
             logger.info(f"   - 配音路径: {audio_zip_path}")
         logger.info(f"   - 纯音频模式: {audio_only}")
+        logger.info(f"   - 纯AI分离模式: {ai_separation_only}")
 
         # 初始化步骤列表
-        if audio_only:
+        if ai_separation_only:
+            # 纯AI音频分离模式：只需要视频，进行AI分离
+            steps = [
+                {'id': 1, 'name': '提取音轨', 'status': 'pending', 'message': '等待开始...'},
+                {'id': 2, 'name': 'AI音频分离', 'status': 'pending', 'message': '等待开始...'},
+                {'id': 3, 'name': '完成', 'status': 'pending', 'message': '等待开始...'}
+            ]
+        elif audio_only:
             # 纯音频合成模式：只需要字幕和配音
             steps = [
                 {'id': 1, 'name': '解析字幕', 'status': 'pending', 'message': '等待开始...'},
@@ -540,6 +567,7 @@ def subtitle_generate_upload():
                 'enable_ai_separation': enable_ai_separation,
                 'generate_no_subtitle': generate_no_subtitle,
                 'audio_only': audio_only,
+                'ai_separation_only': ai_separation_only,
                 'output_dir': output_dir,
                 'steps': steps,
                 'current_step': 0,
@@ -552,7 +580,7 @@ def subtitle_generate_upload():
         thread = threading.Thread(
             target=process_subtitle_generate_task_v2,
             args=(task_id, video_path, srt_path, output_dir, subtitle_config,
-                  original_srt_path, audio_zip_path, enable_ai_separation, generate_no_subtitle, audio_only)
+                  original_srt_path, audio_zip_path, enable_ai_separation, generate_no_subtitle, audio_only, ai_separation_only)
         )
         thread.daemon = True
         logger.info(f"   线程对象已创建，准备启动...")
@@ -643,7 +671,7 @@ def process_subtitle_generate_task(task_id, video_path, srt_path, output_dir, su
 
 def process_subtitle_generate_task_v2(task_id, video_path, srt_path, output_dir,
                                      subtitle_config, original_srt_path, audio_zip_path,
-                                     enable_ai_separation, generate_no_subtitle, audio_only):
+                                     enable_ai_separation, generate_no_subtitle, audio_only, ai_separation_only):
     """处理字幕生成任务（后台线程）- 使用video_processor的完整版本"""
     logger.info(f"🚀 [线程启动] 开始处理完整字幕生成任务 {task_id}")
 
@@ -683,8 +711,14 @@ def process_subtitle_generate_task_v2(task_id, video_path, srt_path, output_dir,
         audio_zip_for_processor = audio_zip_path if audio_zip_path else None
         logger.info(f"   audio_zip_for_processor={audio_zip_for_processor}")
 
-        # 如果没有配音文件，使用简化处理
-        if not audio_zip_path:
+        # 根据模式选择处理流程
+        if ai_separation_only:
+            # 纯AI音频分离模式：只需要视频，进行AI分离
+            logger.info(f"   纯AI音频分离模式，只分离人声和伴奏")
+            result = _process_ai_separation_only(
+                task_id, video_path, output_dir
+            )
+        elif not audio_zip_path:
             logger.info(f"   没有配音文件，使用简化处理流程")
             result = _process_video_only(None, task_id, video_path, srt_path,
                                         output_dir, subtitle_config, original_srt_path,
@@ -957,6 +991,85 @@ def subtitle_generate_delete_task(task_id):
         del subtitle_tasks[task_id]
 
         return jsonify({'message': '任务已删除'})
+
+
+def _process_ai_separation_only(task_id, video_path, output_dir):
+    """处理纯AI音频分离（只需要视频文件）
+
+    从视频提取音轨，使用Demucs分离人声和伴奏
+
+    Args:
+        task_id: 任务ID
+        video_path: 视频文件路径
+        output_dir: 输出目录
+
+    Returns:
+        dict: 包含生成的文件路径
+    """
+    import subprocess
+    from pathlib import Path
+
+    result = {}
+    video_name = Path(video_path).stem
+
+    try:
+        update_subtitle_task_status(task_id, 'processing', 10, '正在提取音轨...')
+
+        # 1. 从视频提取音频
+        extracted_audio = os.path.join(output_dir, f"{video_name}_original.mp3")
+        cmd = [
+            'ffmpeg', '-y',
+            '-i', video_path,
+            '-vn',
+            '-acodec', 'libmp3lame',
+            '-q:a', '2',
+            '-b:a', '192k',
+            extracted_audio
+        ]
+        subprocess.run(cmd, capture_output=True, check=True)
+        logger.info(f"   ✅ 音频提取完成: {extracted_audio}")
+
+        update_subtitle_task_status(task_id, 'processing', 30, '正在进行AI音频分离...')
+
+        # 2. 使用Demucs进行AI分离
+        success = separate_vocals_accompaniment(extracted_audio, output_dir)
+
+        if success:
+            # separate_vocals_accompaniment 会将文件移动到 output_dir 目录下
+            # 并清理 htdemucs 子目录
+            vocals_path = os.path.join(output_dir, 'vocals.wav')
+            no_vocals_path = os.path.join(output_dir, 'no_vocals.wav')
+
+            if os.path.exists(vocals_path) and os.path.exists(no_vocals_path):
+                result['vocals'] = vocals_path
+                result['no_vocals'] = no_vocals_path
+                logger.info(f"   ✅ AI分离完成")
+                logger.info(f"      人声: {vocals_path}")
+                logger.info(f"      伴奏: {no_vocals_path}")
+                update_subtitle_task_status(task_id, 'processing', 100, 'AI音频分离完成')
+            else:
+                # 如果找不到，列出目录内容帮助调试
+                logger.error(f"   ❌ 无法找到生成的文件")
+                logger.error(f"   output_dir 内容:")
+                for root, dirs, files in os.walk(output_dir):
+                    level = root.replace(output_dir, '').count(os.sep)
+                    indent = ' ' * 2 * (level + 1)
+                    logger.error(f"{indent}{os.path.basename(root)}/")
+                    for file in files:
+                        logger.error(f"{' ' * 2 * (level + 2)}{file}")
+                raise Exception("无法找到生成的分离文件")
+        else:
+            raise Exception("AI音频分离失败")
+
+
+        return result
+
+    except Exception as e:
+        logger.error(f"❌ AI音频分离失败: {e}")
+        import traceback
+        traceback.print_exc()
+        update_subtitle_task_status(task_id, 'failed', 0, f'AI分离失败: {str(e)}')
+        return result
 
 
 def _process_audio_only_simple(task_id, srt_path, output_dir, audio_zip_path):
@@ -1992,13 +2105,13 @@ def separate_vocals_accompaniment(audio_path: str, output_dir: str) -> bool:
                     other_path = os.path.join(output_dir, 'other.wav')
 
                     if all(os.path.exists(p) for p in [drums_path, bass_path, other_path]):
-                        # 使用 ffmpeg 混合三个音轨
+                        # 使用 ffmpeg 混合三个音轨，保持原始音量
                         cmd = [
                             'ffmpeg', '-y',
                             '-i', drums_path,
                             '-i', bass_path,
                             '-i', other_path,
-                            '-filter_complex', '[0:a][1:a][2:a]amix=inputs=3:duration=longest',
+                            '-filter_complex', '[0:a][1:a][2:a]amix=inputs=3:duration=longest:normalize=0',
                             '-loglevel', 'error',
                             no_vocals_path
                         ]

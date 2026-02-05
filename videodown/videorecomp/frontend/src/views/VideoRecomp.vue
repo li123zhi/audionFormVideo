@@ -2122,7 +2122,7 @@ const handleMultiTrackAISeparation = async () => {
 
     const formData = new FormData()
     formData.append('video', multiTrackFiles.value.video)
-    formData.append('enable_ai_separation', 'true')
+    formData.append('ai_separation_only', 'true')  // 纯AI分离模式，不需要字幕
 
     ElMessage.info('开始AI音频分离，这可能需要几分钟...')
 
