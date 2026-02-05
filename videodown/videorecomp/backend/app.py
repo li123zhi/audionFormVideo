@@ -356,6 +356,34 @@ def create_hard_subtitle_video(video_path: str, srt_path: str, output_path: str,
 
         logger.info(f"   ✅ 视频处理完成，共处理 {frame_count} 帧")
 
+        # OpenCV生成的视频没有音频，需要从原视频复制音频
+        logger.info(f"   正在为硬字幕视频添加音轨...")
+
+        temp_output_with_audio = output_path.replace('.mp4', '_temp_with_audio.mp4')
+
+        cmd = [
+            'ffmpeg', '-y',
+            '-i', output_path,     # 硬字幕视频（无音频）
+            '-i', video_path,      # 原视频（有音频）
+            '-map', '0:v:0',       # 使用硬字幕视频的视频流
+            '-map', '1:a:0?',      # 使用原视频的音频流（如果存在）
+            '-c:v', 'copy',        # 视频流直接复制
+            '-c:a', 'aac',         # 音频编码为AAC
+            '-b:a', '192k',        # 音频比特率192kbps
+            '-shortest',           # 以最短的流为准
+            temp_output_with_audio
+        ]
+
+        ffmpeg_result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if ffmpeg_result.returncode != 0:
+            logger.warning(f"   ⚠️  添加音轨失败: {ffmpeg_result.stderr}")
+            logger.warning(f"   ⚠️  将返回不带音频的硬字幕视频")
+        else:
+            logger.info(f"   ✅ 硬字幕视频音轨添加完成")
+            # 用带音频的视频替换原硬字幕视频
+            shutil.move(temp_output_with_audio, output_path)
+
         # 验证输出文件
         if os.path.exists(output_path):
             duration = get_video_duration(output_path)
@@ -370,6 +398,66 @@ def create_hard_subtitle_video(video_path: str, srt_path: str, output_path: str,
         logger.error(f"   ❌ 出错: {e}")
         logger.error(f"   详细错误:\n{traceback.format_exc()}")
         return False
+
+
+def hex_to_rgb(hex_color):
+    """将十六进制颜色转换为RGB元组"""
+    hex_color = hex_color.lstrip('&H')
+    if len(hex_color) == 6:
+        return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+    return (255, 255, 255)
+
+
+def _create_subtitle_clips_for_video(video_clip, subtitles_data, subtitle_style):
+    """
+    为视频创建字幕剪辑（用于moviepy）
+
+    Args:
+        video_clip: moviepy VideoFileClip对象
+        subtitles_data: 字幕数据（moviepy格式）
+        subtitle_style: 字幕样式配置
+
+    Returns:
+        字幕剪辑列表
+    """
+    from moviepy.video.fx.Margin import margin
+    from moviepy.video.tools.subtitles import SubtitlesClip
+
+    # 字幕样式
+    font_size = subtitle_style.get('font_size', 32)
+    font_color = hex_to_rgb(subtitle_style.get('primary_colour', '&HFFFFFF'))
+    outline_color = hex_to_rgb(subtitle_style.get('outline_colour', '&H000000'))
+    outline_width = subtitle_style.get('outline', 1)
+    margin_v = subtitle_style.get('margin_v', 100)
+    alignment = subtitle_style.get('alignment', 'center')
+
+    # 创建字幕生成器
+    def make_textclip(txt):
+        """创建单个字幕文本剪辑"""
+        from moviepy.video.fx.all import textclip
+
+        return textclip.TextClip(
+            txt,
+            fontsize=font_size,
+            font='Arial',
+            color=font_color,
+            stroke_color=outline_color,
+            stroke_width=outline_width,
+            align=alignment,
+            size=(video_clip.w * 0.9, None)  # 宽度为视频宽度的90%
+        )
+
+    # 创建字幕剪辑
+    generator = lambda txt: make_textclip(txt)
+    subtitle_clips = SubtitlesClip(subtitles_data, generator=generator)
+
+    # 设置字幕位置（底部居中）
+    subtitle_clips = subtitle_clips.with_position('center', 'bottom')
+
+    # 添加底部边距
+    subtitle_clips = margin(subtitle_clips, bottom=margin_v)
+
+    return [subtitle_clips]
 
 
 # ==================== 软硬字幕生成API ====================
@@ -1201,35 +1289,172 @@ def _process_one_click_workflow(task_id, video_path, srt_path, audio_zip_path, o
 
             final_hard_video = os.path.join(output_dir, f"{video_name}_new_hard.mp4")
 
-            # 直接使用moviepy生成硬字幕视频
-            from moviepy.editor import VideoFileClip
-            from src.subtitle_processor import SubtitleProcessor
-            from moviepy.video.compositing.CompositeVideoClip import CompositeVideoClip
+            # 使用Pillow/OpenCV生成硬字幕视频
+            # 导入必要的库
+            from PIL import Image, ImageDraw, ImageFont
+            import numpy as np
 
-            # 创建字幕处理器
-            subtitle_processor = SubtitleProcessor(srt_path)
-            subtitles_data = subtitle_processor.to_moviepy_format()
+            # 解析SRT字幕
+            logger.info(f"   正在解析字幕文件...")
+            subtitles = parse_srt(srt_path)
+            logger.info(f"   解析到 {len(subtitles)} 条字幕")
 
-            # 创建视频剪辑
-            video_clip = VideoFileClip(temp_video_with_new_audio)
+            # 打开视频
+            logger.info(f"   正在打开视频文件...")
+            cap = cv2.VideoCapture(temp_video_with_new_audio)
 
-            # 创建字幕剪辑
-            subtitle_clips = _create_subtitle_clips_for_video(video_clip, subtitles_data, subtitle_style)
+            if not cap.isOpened():
+                raise Exception("无法打开视频文件")
 
-            # 合成视频和字幕
-            final_with_subtitle = CompositeVideoClip([video_clip] + subtitle_clips)
+            # 获取视频属性
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-            # 写入视频
-            final_with_subtitle.write_videofile(
-                final_hard_video,
-                codec='libx264',
-                audio_codec='aac',
-                temp_audiofile=os.path.join(output_dir, 'temp_audio.m4a'),
-                remove_temp=True
-            )
+            logger.info(f"   视频属性: {width}x{height} @ {fps}fps, 共 {total_frames} 帧")
 
-            video_clip.close()
-            final_with_subtitle.close()
+            # 准备写入输出视频
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(final_hard_video, fourcc, fps, (width, height))
+
+            # 准备字体
+            try:
+                # macOS字体路径
+                font_path = "/System/Library/Fonts/Supplemental/Arial.ttf"
+                if not os.path.exists(font_path):
+                    font_path = "/System/Library/Fonts/Helvetica.ttc"
+                font = ImageFont.truetype(font_path, subtitle_style.get('fontSize', 32))
+            except:
+                font = ImageFont.load_default()
+
+            # 字体颜色
+            font_color_rgb = hex_to_rgb(subtitle_style.get('fontColor', '#FFFFFF'))
+
+            # 描边颜色
+            outline_color_rgb = hex_to_rgb(subtitle_style.get('outlineColor', '#000000'))
+
+            try:
+                # macOS字体路径
+                font_path = "/System/Library/Fonts/Supplemental/Arial.ttf"
+                if not os.path.exists(font_path):
+                    font_path = "/System/Library/Fonts/Helvetica.ttc"
+                font = ImageFont.truetype(font_path, subtitle_style.get('fontSize', 32))
+            except:
+                font = ImageFont.load_default()
+
+            # 字体颜色
+            font_color_rgb = hex_to_rgb(subtitle_style.get('fontColor', '#FFFFFF'))
+
+            # 描边颜色
+            outline_color_rgb = hex_to_rgb(subtitle_style.get('outlineColor', '#000000'))
+
+            logger.info(f"   开始处理视频帧...")
+
+            frame_count = 0
+            last_progress = 0
+
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                # 当前帧的时间戳（秒）
+                current_time = frame_count / fps
+
+                # 查找当前时间应该显示的字幕
+                current_subtitle = None
+                for sub in subtitles:
+                    if sub['start'] <= current_time <= sub['end']:
+                        current_subtitle = sub['text']
+                        break
+
+                # 如果有字幕，绘制到帧上
+                if current_subtitle:
+                    # 将OpenCV图像转换为PIL图像
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    pil_image = Image.fromarray(frame_rgb)
+                    draw = ImageDraw.Draw(pil_image)
+
+                    # 计算最大文本宽度
+                    max_width_ratio = subtitle_style.get('maxWidthRatio', 90) / 100.0
+                    max_text_width = int(width * max_width_ratio)
+
+                    # 自动换行处理
+                    lines = wrap_text(current_subtitle, font, draw, max_text_width)
+
+                    # 计算多行文本的总高度和位置
+                    line_heights = []
+                    for line in lines:
+                        bbox = draw.textbbox((0, 0), line, font=font)
+                        line_heights.append(bbox[3] - bbox[1])
+
+                    total_height = sum(line_heights) + (len(lines) - 1) * 5  # 5像素行间距
+                    bottom_margin = subtitle_style.get('bottomMargin', 100)
+                    y = height - total_height - bottom_margin
+
+                    # 绘制每一行字幕
+                    for i, line in enumerate(lines):
+                        bbox = draw.textbbox((0, 0), line, font=font)
+                        text_width = bbox[2] - bbox[0]
+                        x = (width - text_width) // 2
+
+                        # 绘制描边
+                        outline_width = subtitle_style.get('outlineWidth', 1)
+                        if outline_width > 0:
+                            for adj_x in range(-outline_width, outline_width + 1):
+                                for adj_y in range(-outline_width, outline_width + 1):
+                                    if abs(adj_x) + abs(adj_y) <= outline_width:
+                                        draw.text((x + adj_x, y + adj_y), line,
+                                                font=font, fill=outline_color_rgb)
+
+                        # 绘制主文本
+                        draw.text((x, y), line, font=font, fill=font_color_rgb)
+
+                        # 移动到下一行
+                        y += line_heights[i] + 5
+
+                    # 转换回OpenCV格式
+                    frame = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+
+                # 写入输出视频
+                out.write(frame)
+
+                frame_count += 1
+
+                # 显示进度
+                progress = int((frame_count / total_frames) * 100)
+                if progress - last_progress >= 10:  # 每10%显示一次
+                    logger.info(f"   处理进度: {progress}% ({frame_count}/{total_frames}帧)")
+                    last_progress = progress
+
+            # 释放资源
+            cap.release()
+            out.release()
+
+            logger.info(f"   ✅ 视频处理完成，共处理 {frame_count} 帧")
+
+            # 硬字幕视频现在没有音频，需要从 temp_video_with_new_audio 复制音频
+            logger.info(f"   正在为硬字幕视频添加音轨...")
+            temp_hard_with_audio = final_hard_video.replace('.mp4', '_temp_with_audio.mp4')
+
+            cmd = [
+                'ffmpeg', '-y',
+                '-i', final_hard_video,          # 硬字幕视频（无音频）
+                '-i', temp_video_with_new_audio,  # 原始视频（有新音频）
+                '-map', '0:v:0',                  # 使用硬字幕视频的视频流
+                '-map', '1:a:0?',                 # 使用原始视频的音频流（如果存在）
+                '-c:v', 'copy',                   # 视频流直接复制
+                '-c:a', 'aac',                    # 音频编码为AAC
+                '-b:a', '192k',                   # 音频比特率192kbps
+                '-shortest',                      # 以最短的流为准
+                temp_hard_with_audio
+            ]
+            subprocess.run(cmd, capture_output=True, check=True)
+            logger.info(f"   ✅ 硬字幕视频音轨添加完成")
+
+            # 用带音频的视频替换原硬字幕视频
+            shutil.move(temp_hard_with_audio, final_hard_video)
 
             result['new_hard_subtitle'] = final_hard_video
             logger.info(f"   ✅ 硬字幕视频生成完成: {final_hard_video}")
@@ -2294,6 +2519,10 @@ def separate_vocals_accompaniment(audio_path: str, output_dir: str) -> bool:
         import sys
         python_exe = sys.executable
 
+        # 设置环境变量，强制使用soundfile后端（避免torchaudio 2.9的兼容性问题）
+        env = os.environ.copy()
+        env['TORCHAUDIO_USE_BACKEND_DISPATCHER'] = 'soundfile'
+
         cmd = [
             python_exe, '-m', 'demucs',
             '-n', 'htdemucs',
@@ -2312,7 +2541,8 @@ def separate_vocals_accompaniment(audio_path: str, output_dir: str) -> bool:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            bufsize=1  # 行缓冲
+            bufsize=1,  # 行缓冲
+            env=env  # 传递环境变量
         )
 
         # 实时输出demucs的进度
