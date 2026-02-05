@@ -72,6 +72,30 @@
               </el-upload>
             </el-form-item>
 
+            <!-- 原字幕文件上传（可选） -->
+            <el-form-item label="原字幕文件">
+              <el-upload
+                ref="originalSrtUpload"
+                class="upload-demo"
+                drag
+                :auto-upload="false"
+                :limit="1"
+                :on-change="(file) => handleFileChange(file, 'originalSrt')"
+                :on-remove="() => handleFileRemove('originalSrt')"
+                accept=".srt"
+              >
+                <el-icon class="el-icon--upload"><Document /></el-icon>
+                <div class="el-upload__text">
+                  拖拽原SRT文件到此处或 <em>点击上传</em>
+                </div>
+                <template #tip>
+                  <div class="el-upload__tip">
+                    原始字幕文件（可选），如果提供则生成原字幕版本的视频
+                  </div>
+                </template>
+              </el-upload>
+            </el-form-item>
+
             <!-- 配音文件上传 -->
             <el-form-item label="配音文件">
               <el-upload
@@ -94,6 +118,31 @@
                   </div>
                 </template>
               </el-upload>
+            </el-form-item>
+
+            <!-- 功能选项 -->
+            <el-divider content-position="left">功能选项</el-divider>
+
+            <el-form-item label="AI音频分离">
+              <el-switch
+                v-model="processingOptions.enableAISeparation"
+                active-text="启用"
+                inactive-text="禁用"
+              />
+              <div class="el-upload__tip">
+                从原视频中分离人声和伴奏，然后与配音混合（需要较长时间）
+              </div>
+            </el-form-item>
+
+            <el-form-item label="生成不带字幕视频">
+              <el-switch
+                v-model="processingOptions.generateNoSubtitle"
+                active-text="生成"
+                inactive-text="不生成"
+              />
+              <div class="el-upload__tip">
+                生成不带字幕的版本，包含新音频
+              </div>
             </el-form-item>
 
             <!-- 字幕样式选项 -->
@@ -181,10 +230,38 @@
         <div class="progress-content">
           <el-steps :active="currentStep" finish-status="success" align-center>
             <el-step title="上传文件" :description="uploadProgress + '%'"></el-step>
-            <el-step title="生成软字幕视频" :description="processProgress + '%'"></el-step>
-            <el-step title="生成硬字幕视频" :description="burnProgress + '%'"></el-step>
+            <el-step title="处理音频" :description="processProgress + '%'"></el-step>
+            <el-step title="生成视频" :description="burnProgress + '%'"></el-step>
             <el-step title="完成"></el-step>
           </el-steps>
+
+          <!-- 步骤详情 -->
+          <div v-if="processingSteps.length > 0" style="margin-top: 30px;">
+            <h4 style="margin-bottom: 15px;">处理步骤</h4>
+            <el-timeline>
+              <el-timeline-item
+                v-for="step in processingSteps"
+                :key="step.id"
+                :type="getStepStatusType(step.status)"
+                :icon="getStepIcon(step.status)"
+                :color="getStepColor(step.status)"
+              >
+                <div class="step-item">
+                  <div class="step-header">
+                    <span class="step-name">{{ step.name }}</span>
+                    <el-tag
+                      :type="getStepTagType(step.status)"
+                      size="small"
+                      effect="plain"
+                    >
+                      {{ getStepStatusText(step.status) }}
+                    </el-tag>
+                  </div>
+                  <div class="step-message">{{ step.message }}</div>
+                </div>
+              </el-timeline-item>
+            </el-timeline>
+          </div>
 
           <div class="status-text">
             <p>{{ statusMessage }}</p>
@@ -209,7 +286,7 @@
             show-icon
           >
             <template #default>
-              <p>已生成两个版本的视频，请点击下方按钮下载</p>
+              <p>已生成多个文件，请点击下方按钮下载</p>
             </template>
           </el-alert>
 
@@ -217,25 +294,53 @@
             <el-descriptions-item label="任务ID">
               {{ taskId }}
             </el-descriptions-item>
-            <el-descriptions-item label="软字幕视频">
-              <el-button type="success" size="small" @click="downloadResult('soft_subtitle_video')">
-                <el-icon><Download /></el-icon>
-                下载软字幕视频
-              </el-button>
-              <div class="el-upload__tip">视频内嵌字幕，可随时开关</div>
+
+            <!-- 视频文件 -->
+            <el-descriptions-item label="视频文件">
+              <div style="display: flex; flex-direction: column; gap: 8px;">
+                <el-button type="success" size="small" @click="downloadFile('no_subtitle')" v-if="generatedFiles.no_subtitle">
+                  <el-icon><Download /></el-icon>
+                  下载不带字幕视频
+                </el-button>
+                <el-button type="primary" size="small" @click="downloadFile('new_soft_subtitle')" v-if="generatedFiles.new_soft_subtitle">
+                  <el-icon><Download /></el-icon>
+                  下载新字幕软字幕视频
+                </el-button>
+                <el-button type="warning" size="small" @click="downloadFile('new_hard_subtitle')" v-if="generatedFiles.new_hard_subtitle">
+                  <el-icon><Download /></el-icon>
+                  下载新字幕硬字幕视频
+                </el-button>
+                <el-button type="info" size="small" @click="downloadFile('original_soft_subtitle')" v-if="generatedFiles.original_soft_subtitle">
+                  <el-icon><Download /></el-icon>
+                  下载原字幕软字幕视频
+                </el-button>
+                <el-button type="warning" size="small" @click="downloadFile('original_hard_subtitle')" v-if="generatedFiles.original_hard_subtitle">
+                  <el-icon><Download /></el-icon>
+                  下载原字幕硬字幕视频
+                </el-button>
+              </div>
             </el-descriptions-item>
-            <el-descriptions-item label="硬字幕视频">
-              <el-button type="warning" size="small" @click="downloadResult('hard_subtitle_video')">
-                <el-icon><Download /></el-icon>
-                下载硬字幕视频
-              </el-button>
-              <div class="el-upload__tip">字幕烧录到画面，无法关闭</div>
-            </el-descriptions-item>
-            <el-descriptions-item label="配音文件（如果上传）" v-if="hasAudio">
-              <el-button type="info" size="small" @click="downloadResult('audio')">
-                <el-icon><Download /></el-icon>
-                下载配音文件
-              </el-button>
+
+            <!-- 音频文件 -->
+            <el-descriptions-item label="音频文件" v-if="hasAudioFiles">
+              <div style="display: flex; flex-direction: column; gap: 8px;">
+                <el-button type="info" size="small" @click="downloadFile('merged_audio')" v-if="generatedFiles.merged_audio">
+                  <el-icon><Download /></el-icon>
+                  下载合并配音音频
+                </el-button>
+                <el-button type="info" size="small" @click="downloadFile('mixed_audio')" v-if="generatedFiles.mixed_audio">
+                  <el-icon><Download /></el-icon>
+                  下载伴奏混合音频
+                </el-button>
+                <el-button type="info" size="small" @click="downloadFile('vocals')" v-if="generatedFiles.vocals">
+                  <el-icon><Download /></el-icon>
+                  下载人声
+                </el-button>
+                <el-button type="info" size="small" @click="downloadFile('no_vocals')" v-if="generatedFiles.no_vocals">
+                  <el-icon><Download /></el-icon>
+                  下载伴奏
+                </el-button>
+              </div>
             </el-descriptions-item>
           </el-descriptions>
 
@@ -620,6 +725,33 @@
                     <span class="progress-text">{{ audioMixProgress }}%</span>
                   </el-progress>
                   <div class="progress-message">{{ audioMixStatusMessage }}</div>
+
+                  <!-- 详细步骤列表 -->
+                  <div class="steps-list" style="margin-top: 20px;">
+                    <el-timeline>
+                      <el-timeline-item
+                        v-for="step in audioMixTaskDetails.steps || []"
+                        :key="step.id"
+                        :type="getStepStatusType(step.status)"
+                        :icon="getStepIcon(step.status)"
+                        :color="getStepColor(step.status)"
+                      >
+                        <div class="step-item">
+                          <div class="step-header">
+                            <span class="step-name">{{ step.name }}</span>
+                            <el-tag
+                              :type="getStepTagType(step.status)"
+                              size="small"
+                              effect="plain"
+                            >
+                              {{ getStepStatusText(step.status) }}
+                            </el-tag>
+                          </div>
+                          <div class="step-message">{{ step.message }}</div>
+                        </div>
+                      </el-timeline-item>
+                    </el-timeline>
+                  </div>
                 </div>
 
                 <!-- 完成状态 -->
@@ -639,6 +771,27 @@
                         <el-descriptions-item label="配音合并">{{ audioMixFiles.dubbing ? '完成' : '跳过' }}</el-descriptions-item>
                         <el-descriptions-item label="最终音轨">已生成</el-descriptions-item>
                       </el-descriptions>
+
+                      <!-- 完成的步骤列表 -->
+                      <div class="completed-steps" style="margin-top: 24px;">
+                        <h4 style="margin-bottom: 16px;">处理步骤</h4>
+                        <el-timeline>
+                          <el-timeline-item
+                            v-for="step in audioMixTaskDetails.steps || []"
+                            :key="step.id"
+                            type="success"
+                            icon="CircleCheck"
+                          >
+                            <div class="step-item">
+                              <div class="step-header">
+                                <span class="step-name">{{ step.name }}</span>
+                                <el-tag type="success" size="small" effect="plain">完成</el-tag>
+                              </div>
+                              <div class="step-message">{{ step.message }}</div>
+                            </div>
+                          </el-timeline-item>
+                        </el-timeline>
+                      </div>
                     </template>
                   </el-result>
                 </div>
@@ -689,7 +842,9 @@ import {
   VideoPlay,
   RefreshLeft,
   CloseBold,
-  DataAnalysis
+  DataAnalysis,
+  Clock,
+  CircleClose
 } from '@element-plus/icons-vue'
 import {
   generateSubtitleVideos,
@@ -713,6 +868,7 @@ const activeTab = ref('subtitle')
 const files = ref({
   video: null,
   srt: null,
+  originalSrt: null,  // 新增：原字幕文件
   audio: null
 })
 
@@ -728,6 +884,12 @@ const subtitleConfig = ref({
   maxWidthRatio: 90
 })
 
+// 处理选项
+const processingOptions = ref({
+  enableAISeparation: false,  // 是否启用AI音频分离
+  generateNoSubtitle: true    // 是否生成不带字幕的视频
+})
+
 // 状态
 const uploading = ref(false)
 const processing = ref(false)
@@ -741,6 +903,30 @@ const processProgress = ref(0)
 const burnProgress = ref(0)
 const currentStep = ref(0)
 const statusMessage = ref('')
+
+// 处理步骤列表
+const processingSteps = ref([])
+
+// 生成的文件
+const generatedFiles = ref({
+  no_subtitle: null,
+  new_soft_subtitle: null,
+  new_hard_subtitle: null,
+  original_soft_subtitle: null,
+  original_hard_subtitle: null,
+  merged_audio: null,
+  mixed_audio: null,
+  vocals: null,
+  no_vocals: null
+})
+
+// 是否有音频文件
+const hasAudioFiles = computed(() => {
+  return generatedFiles.value.merged_audio ||
+         generatedFiles.value.mixed_audio ||
+         generatedFiles.value.vocals ||
+         generatedFiles.value.no_vocals
+})
 
 // 检查是否可以上传
 const canUpload = computed(() => {
@@ -772,10 +958,30 @@ const handleUpload = async () => {
     burnProgress.value = 0
     statusMessage.value = '正在上传文件...'
 
+    // 重置处理步骤和生成的文件
+    processingSteps.value = []
+    generatedFiles.value = {
+      no_subtitle: null,
+      new_soft_subtitle: null,
+      new_hard_subtitle: null,
+      original_soft_subtitle: null,
+      original_hard_subtitle: null,
+      merged_audio: null,
+      mixed_audio: null,
+      vocals: null,
+      no_vocals: null
+    }
+
     // 创建FormData
     const formData = new FormData()
     formData.append('video', files.value.video)
     formData.append('srt', files.value.srt)
+
+    // 添加原字幕文件（如果提供）
+    if (files.value.originalSrt) {
+      formData.append('original_srt', files.value.originalSrt)
+    }
+
     if (files.value.audio) {
       formData.append('audio', files.value.audio)
     }
@@ -784,6 +990,10 @@ const handleUpload = async () => {
     const config = { ...subtitleConfig.value }
     config.maxWidthRatio = config.maxWidthRatio / 100
     formData.append('subtitle_config', JSON.stringify(config))
+
+    // 添加处理选项
+    formData.append('enable_ai_separation', processingOptions.value.enableAISeparation ? 'true' : 'false')
+    formData.append('generate_no_subtitle', processingOptions.value.generateNoSubtitle ? 'true' : 'false')
 
     // 上传文件
     const response = await generateSubtitleVideos(formData, (progress) => {
@@ -836,11 +1046,30 @@ const pollTaskStatus = async () => {
       }
     }
 
+    // 更新处理步骤
+    if (status.steps && Array.isArray(status.steps)) {
+      processingSteps.value = status.steps
+    }
+
+    // 更新生成的文件
+    if (status.files) {
+      generatedFiles.value = {
+        ...generatedFiles.value,
+        ...status.files
+      }
+    }
+
     if (status.status === 'completed') {
       processing.value = false
       completed.value = true
       currentStep.value = 3
       statusMessage.value = '处理完成！'
+
+      // 保存生成的文件
+      if (status.files) {
+        generatedFiles.value = status.files
+      }
+
       ElMessage.success('视频生成成功！')
       return
     }
@@ -861,16 +1090,32 @@ const pollTaskStatus = async () => {
   }
 }
 
-// 下载结果
-const downloadResult = async (type) => {
+// 下载生成的文件
+const downloadFile = async (fileType) => {
   if (!taskId.value) {
     ElMessage.warning('任务不存在')
     return
   }
 
   try {
-    // 映射类型名称：soft_subtitle_video -> soft, hard_subtitle_video -> hard
-    const downloadType = type === 'soft_subtitle_video' ? 'soft' : 'hard'
+    // 根据文件类型映射到后端的下载接口
+    const fileTypeMap = {
+      'no_subtitle': 'no_subtitle',
+      'new_soft_subtitle': 'soft',
+      'new_hard_subtitle': 'hard',
+      'original_soft_subtitle': 'original_soft',
+      'original_hard_subtitle': 'original_hard',
+      'merged_audio': 'merged_audio',
+      'mixed_audio': 'mixed_audio',
+      'vocals': 'vocals',
+      'no_vocals': 'no_vocals'
+    }
+
+    const downloadType = fileTypeMap[fileType]
+    if (!downloadType) {
+      ElMessage.error('不支持的文件类型')
+      return
+    }
 
     await downloadSubtitleVideo(taskId.value, downloadType)
     ElMessage.success('下载成功')
@@ -1227,6 +1472,57 @@ const cancelAudioMix = async () => {
   }
 }
 
+// 步骤状态处理函数
+const getStepStatusType = (status) => {
+  const statusMap = {
+    'pending': 'info',
+    'processing': 'primary',
+    'completed': 'success',
+    'failed': 'danger'
+  }
+  return statusMap[status] || 'info'
+}
+
+const getStepIcon = (status) => {
+  const iconMap = {
+    'pending': Clock,
+    'processing': Loading,
+    'completed': CircleCheck,
+    'failed': CircleClose
+  }
+  return iconMap[status] || Clock
+}
+
+const getStepColor = (status) => {
+  const colorMap = {
+    'pending': '#909399',
+    'processing': '#409EFF',
+    'completed': '#67C23A',
+    'failed': '#F56C6C'
+  }
+  return colorMap[status] || '#909399'
+}
+
+const getStepTagType = (status) => {
+  const typeMap = {
+    'pending': 'info',
+    'processing': 'primary',
+    'completed': 'success',
+    'failed': 'danger'
+  }
+  return typeMap[status] || 'info'
+}
+
+const getStepStatusText = (status) => {
+  const textMap = {
+    'pending': '等待中',
+    'processing': '处理中',
+    'completed': '已完成',
+    'failed': '失败'
+  }
+  return textMap[status] || '未知'
+}
+
 // 返回
 const goBack = () => {
   router.push('/')
@@ -1354,5 +1650,78 @@ const goBack = () => {
 .info-content strong {
   color: #606266;
   font-weight: 600;
+}
+
+/* 步骤显示样式 */
+.steps-list {
+  padding: 10px 0;
+}
+
+.step-item {
+  width: 100%;
+}
+
+.step-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.step-name {
+  font-size: 15px;
+  font-weight: 500;
+  color: #303133;
+}
+
+.step-message {
+  font-size: 13px;
+  color: #909399;
+  line-height: 1.6;
+}
+
+.progress-wrapper {
+  padding: 20px 0;
+}
+
+.progress-message {
+  text-align: center;
+  margin-top: 15px;
+  font-size: 14px;
+  color: #606266;
+}
+
+.progress-text {
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.completed-steps {
+  padding: 20px;
+  background: #f5f7fa;
+  border-radius: 8px;
+}
+
+.completed-steps h4 {
+  margin: 0 0 16px 0;
+  color: #303133;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.result-section {
+  margin-top: 20px;
+}
+
+.result-card {
+  border: 1px solid #ebeef5;
+}
+
+.success-section {
+  padding: 20px 0;
+}
+
+.info-section {
+  margin-top: 20px;
 }
 </style>

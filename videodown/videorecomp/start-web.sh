@@ -80,9 +80,8 @@ echo -e "${GREEN}✓ 所有旧服务和端口已清理${NC}"
 echo ""
 echo -e "${GREEN}启动后端API服务...${NC}"
 cd backend
-source venv/bin/activate
-# 直接在终端输出（python -u 禁用缓冲确保实时显示）
-python -u app.py 2>&1 &
+# 直接在终端输出（使用venv中的python）
+./venv/bin/python -u app.py 2>&1 &
 BACKEND_PID=$!
 cd ..
 

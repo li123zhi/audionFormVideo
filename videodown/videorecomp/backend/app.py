@@ -381,21 +381,25 @@ subtitle_tasks_lock = threading.Lock()
 @app.route('/api/subtitle-generate', methods=['POST'])
 def subtitle_generate_upload():
     """
-    软硬字幕视频生成 - 上传文件
+    软硬字幕视频生成 - 上传文件（完整版本，使用video_processor）
 
     Request:
         - video: 原视频文件
         - srt: 新字幕文件
+        - original_srt: 原字幕文件（可选）
+        - audio: 配音ZIP文件（可选）
         - subtitle_config: 字幕样式配置（JSON字符串，可选）
+        - enable_ai_separation: 是否启用AI音频分离（可选，默认false）
+        - generate_no_subtitle: 是否生成不带字幕的视频（可选，默认true）
 
     Response:
         - task_id: 任务ID
     """
     try:
         logger.info("=" * 60)
-        logger.info("收到软硬字幕视频生成任务")
+        logger.info("收到软硬字幕视频生成任务（完整版）")
 
-        # 检查文件
+        # 检查必需文件
         if 'video' not in request.files:
             return jsonify({'error': '缺少视频文件'}), 400
         if 'srt' not in request.files:
@@ -404,12 +408,20 @@ def subtitle_generate_upload():
         video = request.files['video']
         srt = request.files['srt']
 
+        # 获取可选文件
+        original_srt = request.files.get('original_srt')
+        audio_zip = request.files.get('audio')
+
         # 获取字幕配置
         subtitle_config_json = request.form.get('subtitle_config', '{}')
         try:
             subtitle_config = json.loads(subtitle_config_json)
         except:
             subtitle_config = {}
+
+        # 获取处理选项
+        enable_ai_separation = request.form.get('enable_ai_separation', 'false').lower() == 'true'
+        generate_no_subtitle = request.form.get('generate_no_subtitle', 'true').lower() == 'true'
 
         if video.filename == '' or srt.filename == '':
             return jsonify({'error': '文件名为空'}), 400
@@ -421,12 +433,25 @@ def subtitle_generate_upload():
         task_dir = os.path.join(TASKS_FOLDER, f'subtitle_{task_id}')
         os.makedirs(task_dir, exist_ok=True)
 
-        # 保存文件
+        # 保存视频和新字幕
         video_path = os.path.join(task_dir, video.filename)
         srt_path = os.path.join(task_dir, srt.filename)
-
         video.save(video_path)
         srt.save(srt_path)
+
+        # 保存原字幕（如果提供）
+        original_srt_path = None
+        if original_srt and original_srt.filename:
+            original_srt_path = os.path.join(task_dir, original_srt.filename)
+            original_srt.save(original_srt_path)
+            logger.info(f"原字幕: {original_srt.filename}")
+
+        # 保存配音ZIP（如果提供）
+        audio_zip_path = None
+        if audio_zip and audio_zip.filename:
+            audio_zip_path = os.path.join(task_dir, audio_zip.filename)
+            audio_zip.save(audio_zip_path)
+            logger.info(f"配音: {audio_zip.filename}")
 
         # 创建输出目录
         output_dir = os.path.join(OUTPUT_FOLDER, f'subtitle_{task_id}')
@@ -435,9 +460,35 @@ def subtitle_generate_upload():
         logger.info(f"任务ID: {task_id}")
         logger.info(f"视频: {video.filename} ({os.path.getsize(video_path) / 1024 / 1024:.2f} MB)")
         logger.info(f"字幕: {srt.filename}")
+        logger.info(f"AI分离: {enable_ai_separation}")
+        logger.info(f"生成无字幕视频: {generate_no_subtitle}")
         logger.info(f"💾 本地模式：文件保存在本地")
         logger.info(f"   - 视频路径: {video_path}")
         logger.info(f"   - 字幕路径: {srt_path}")
+
+        # 初始化步骤列表
+        steps = [
+            {'id': 1, 'name': '提取音轨', 'status': 'pending', 'message': '等待开始...'},
+            {'id': 2, 'name': 'AI音频分离', 'status': 'pending', 'message': '等待开始...'},
+            {'id': 3, 'name': '合并配音', 'status': 'pending', 'message': '等待开始...'},
+            {'id': 4, 'name': '生成视频', 'status': 'pending', 'message': '等待开始...'},
+            {'id': 5, 'name': '完成', 'status': 'pending', 'message': '等待开始...'}
+        ]
+
+        # 根据选项调整步骤
+        if not enable_ai_separation and not audio_zip_path:
+            # 没有AI分离，没有配音，只生成视频
+            steps = [
+                {'id': 1, 'name': '生成不带字幕视频', 'status': 'pending', 'message': '等待开始...'},
+                {'id': 2, 'name': '生成软字幕视频', 'status': 'pending', 'message': '等待开始...'},
+                {'id': 3, 'name': '生成硬字幕视频', 'status': 'pending', 'message': '等待开始...'}
+            ]
+        elif not enable_ai_separation:
+            # 没有AI分离，但有配音
+            steps = [
+                {'id': 1, 'name': '合并配音', 'status': 'pending', 'message': '等待开始...'},
+                {'id': 2, 'name': '生成视频', 'status': 'pending', 'message': '等待开始...'}
+            ]
 
         # 初始化任务
         with subtitle_tasks_lock:
@@ -449,20 +500,29 @@ def subtitle_generate_upload():
                 'created_at': datetime.now().isoformat(),
                 'video_path': video_path,
                 'srt_path': srt_path,
+                'original_srt_path': original_srt_path,
+                'audio_zip_path': audio_zip_path,
                 'subtitle_config': subtitle_config,
-                'soft_subtitle_video': None,
-                'hard_subtitle_video': None,
+                'enable_ai_separation': enable_ai_separation,
+                'generate_no_subtitle': generate_no_subtitle,
                 'output_dir': output_dir,
+                'steps': steps,
+                'current_step': 0,
+                'files': {},
                 'error': None
             }
 
         # 在后台线程中处理
+        logger.info(f"   正在创建后台线程...")
         thread = threading.Thread(
-            target=process_subtitle_generate_task,
-            args=(task_id, video_path, srt_path, output_dir, subtitle_config)
+            target=process_subtitle_generate_task_v2,
+            args=(task_id, video_path, srt_path, output_dir, subtitle_config,
+                  original_srt_path, audio_zip_path, enable_ai_separation, generate_no_subtitle)
         )
         thread.daemon = True
+        logger.info(f"   线程对象已创建，准备启动...")
         thread.start()
+        logger.info(f"   ✅ 后台线程已启动，task_id={task_id}")
 
         logger.info("=" * 60)
 
@@ -546,13 +606,201 @@ def process_subtitle_generate_task(task_id, video_path, srt_path, output_dir, su
         logger.error("=" * 60)
 
 
+def process_subtitle_generate_task_v2(task_id, video_path, srt_path, output_dir,
+                                     subtitle_config, original_srt_path, audio_zip_path,
+                                     enable_ai_separation, generate_no_subtitle):
+    """处理字幕生成任务（后台线程）- 使用video_processor的完整版本"""
+    logger.info(f"🚀 [线程启动] 开始处理完整字幕生成任务 {task_id}")
+
+    # 首先更新状态，表示线程已启动
+    try:
+        with subtitle_tasks_lock:
+            if task_id in subtitle_tasks:
+                subtitle_tasks[task_id]['message'] = '线程已启动，正在初始化...'
+    except:
+        pass
+
+    try:
+        logger.info(f"🎬 [任务开始] task_id={task_id}")
+        logger.info(f"   video_path={video_path}")
+        logger.info(f"   srt_path={srt_path}")
+        logger.info(f"   output_dir={output_dir}")
+        logger.info(f"   original_srt_path={original_srt_path}")
+        logger.info(f"   audio_zip_path={audio_zip_path}")
+        logger.info(f"   enable_ai_separation={enable_ai_separation}")
+        logger.info(f"   generate_no_subtitle={generate_no_subtitle}")
+
+        # 转换字幕样式配置
+        video_processor_style = {}
+        if subtitle_config:
+            logger.info(f"   字幕配置: {subtitle_config}")
+            video_processor_style = {
+                'font_size': subtitle_config.get('fontSize', 32),
+                'primary_colour': subtitle_config.get('fontColor', '&HFFFFFF'),
+                'outline_colour': subtitle_config.get('outlineColor', '&H000000'),
+                'outline': subtitle_config.get('outline', 1) if subtitle_config.get('outline') else 0,
+                'margin_v': subtitle_config.get('bottomMargin', 100),
+                'alignment': 'center'
+            }
+
+        # 准备音频ZIP路径
+        audio_zip_for_processor = audio_zip_path if audio_zip_path else None
+        logger.info(f"   audio_zip_for_processor={audio_zip_for_processor}")
+
+        # 如果没有配音文件，使用简化处理
+        if not audio_zip_path:
+            logger.info(f"   没有配音文件，使用简化处理流程")
+            result = _process_video_only(None, task_id, video_path, srt_path,
+                                        output_dir, subtitle_config, original_srt_path,
+                                        enable_ai_separation, generate_no_subtitle)
+        else:
+            logger.info(f"   有配音文件，使用完整处理流程")
+            # 尝试使用 video_processor
+            try:
+                recomposer = create_video_recomposer(
+                    original_video=video_path,
+                    srt_file=srt_path,
+                    audio_zip=audio_zip_for_processor,
+                    output_dir=output_dir,
+                    subtitle_style=video_processor_style,
+                    enable_ai_separation=enable_ai_separation,
+                    original_srt_file=original_srt_path
+                )
+                result = recomposer.process()
+            except Exception as e:
+                logger.error(f"   video_processor处理失败: {e}")
+                logger.error(f"   回退到简化处理流程")
+                import traceback
+                traceback.print_exc()
+                # 回退到简化处理
+                result = _process_video_only(None, task_id, video_path, srt_path,
+                                            output_dir, subtitle_config, original_srt_path,
+                                            enable_ai_separation, generate_no_subtitle)
+
+        logger.info(f"   处理结果: {list(result.keys())}")
+
+        # 更新任务状态
+        with subtitle_tasks_lock:
+            task = subtitle_tasks[task_id]
+            task['status'] = 'completed'
+            task['progress'] = 100
+            task['message'] = '处理完成'
+            task['completed_at'] = datetime.now().isoformat()
+
+            # 保存生成的文件
+            task['files'] = {
+                'no_subtitle': result.get('no_subtitle'),
+                'new_soft_subtitle': result.get('new_soft_subtitle'),
+                'new_hard_subtitle': result.get('new_hard_subtitle'),
+                'original_soft_subtitle': result.get('original_soft_subtitle'),
+                'original_hard_subtitle': result.get('original_hard_subtitle'),
+                'merged_audio': result.get('merged_audio'),
+                'mixed_audio': result.get('mixed_audio')
+            }
+
+            # 记录所有文件
+            logger.info(f"   生成的文件:")
+            for key, value in task['files'].items():
+                if value:
+                    logger.info(f"      ✅ {key}: {value}")
+                else:
+                    logger.info(f"      ❌ {key}: None")
+
+        logger.info(f"✅ 完整字幕生成任务 {task_id} 处理成功")
+        logger.info(f"   💾 保存位置: {output_dir}")
+        logger.info("=" * 60)
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        logger.error(f"❌ 完整字幕生成任务 {task_id} 处理失败: {str(e)}")
+        logger.error(f"   错误类型: {type(e).__name__}")
+        logger.error(f"   错误信息: {str(e)}")
+
+        # 更新任务状态为失败
+        with subtitle_tasks_lock:
+            subtitle_tasks[task_id]['status'] = 'failed'
+            subtitle_tasks[task_id]['error'] = str(e)
+            subtitle_tasks[task_id]['message'] = f'处理失败: {str(e)}'
+        logger.error("=" * 60)
+
+
+def _process_video_only(recomposer, task_id, video_path, srt_path, output_dir,
+                       subtitle_config, original_srt_path, enable_ai_separation, generate_no_subtitle):
+    """只处理视频，不处理音频（简化版本）"""
+    from moviepy import VideoFileClip
+    import subprocess
+
+    video_name = Path(video_path).stem
+    result = {}
+
+    # 1. 生成不带字幕的视频（如果需要）
+    if generate_no_subtitle:
+        update_subtitle_task_status(task_id, 'processing', 20, '正在生成不带字幕视频...')
+        no_subtitle_path = os.path.join(output_dir, f"{video_name}_no_subtitle.mp4")
+        # 直接复制原视频
+        subprocess.run(['ffmpeg', '-y', '-i', video_path, '-c', 'copy', no_subtitle_path],
+                      capture_output=True, check=True)
+        result['no_subtitle'] = no_subtitle_path
+        logger.info(f"✅ 不带字幕视频: {no_subtitle_path}")
+
+    # 2. 生成新字幕软字幕视频
+    update_subtitle_task_status(task_id, 'processing', 40, '正在生成新字幕软字幕视频...')
+    new_soft_path = os.path.join(output_dir, f"{video_name}_new_soft.mp4")
+    success = create_soft_subtitle_video(video_path, srt_path, new_soft_path)
+    if success:
+        result['new_soft_subtitle'] = new_soft_path
+        logger.info(f"✅ 新字幕软字幕视频: {new_soft_path}")
+
+    # 3. 生成新字幕硬字幕视频
+    update_subtitle_task_status(task_id, 'burning', 60, '正在生成新字幕硬字幕视频...')
+    new_hard_path = os.path.join(output_dir, f"{video_name}_new_hard.mp4")
+    success = create_hard_subtitle_video(video_path, srt_path, new_hard_path, subtitle_config)
+    if success:
+        result['new_hard_subtitle'] = new_hard_path
+        logger.info(f"✅ 新字幕硬字幕视频: {new_hard_path}")
+
+    # 4. 如果有原字幕，生成原字幕版本
+    if original_srt_path and os.path.exists(original_srt_path):
+        update_subtitle_task_status(task_id, 'burning', 80, '正在生成原字幕视频...')
+
+        original_soft_path = os.path.join(output_dir, f"{video_name}_original_soft.mp4")
+        success = create_soft_subtitle_video(video_path, original_srt_path, original_soft_path)
+        if success:
+            result['original_soft_subtitle'] = original_soft_path
+            logger.info(f"✅ 原字幕软字幕视频: {original_soft_path}")
+
+        original_hard_path = os.path.join(output_dir, f"{video_name}_original_hard.mp4")
+        success = create_hard_subtitle_video(video_path, original_srt_path, original_hard_path, subtitle_config)
+        if success:
+            result['original_hard_subtitle'] = original_hard_path
+            logger.info(f"✅ 原字幕硬字幕视频: {original_hard_path}")
+
+    return result
+
+
 def update_subtitle_task_status(task_id, status, progress, message):
     """更新字幕任务状态"""
     with subtitle_tasks_lock:
         if task_id in subtitle_tasks:
-            subtitle_tasks[task_id]['status'] = status
-            subtitle_tasks[task_id]['progress'] = progress
-            subtitle_tasks[task_id]['message'] = message
+            task = subtitle_tasks[task_id]
+            task['status'] = status
+            task['progress'] = progress
+            task['message'] = message
+
+            # 更新步骤状态
+            if 'steps' in task and task['steps']:
+                # 根据进度确定当前步骤
+                step_count = len(task['steps'])
+                current_step_index = int((progress / 100) * (step_count - 1))
+                for i, step in enumerate(task['steps']):
+                    if i < current_step_index:
+                        step['status'] = 'completed'
+                    elif i == current_step_index:
+                        step['status'] = 'processing'
+                        step['message'] = message
+                    else:
+                        step['status'] = 'pending'
 
 
 @app.route('/api/subtitle-generate/status/<task_id>', methods=['GET'])
@@ -562,17 +810,57 @@ def subtitle_generate_status(task_id):
         task = subtitle_tasks.get(task_id)
         if not task:
             return jsonify({'error': '任务不存在'}), 404
+
+        # 确保files字段存在，如果不存在则初始化
+        if 'files' not in task:
+            task['files'] = {}
+            logger.info(f"   [状态查询] 初始化files字段为空字典")
+
+        # 兼容旧格式：如果使用旧的处理函数，将旧字段映射到新格式
+        if not task['files'] and task.get('soft_subtitle_video'):
+            task['files']['soft'] = task.get('soft_subtitle_video')
+            logger.info(f"   [状态查询] 映射旧字段soft_subtitle_video到files.soft")
+
+        if not task['files'] and task.get('hard_subtitle_video'):
+            task['files']['hard'] = task.get('hard_subtitle_video')
+            logger.info(f"   [状态查询] 映射旧字段hard_subtitle_video到files.hard")
+
+        # 同时也保持新格式的映射（为了前端兼容性）
+        if task.get('files', {}).get('new_soft_subtitle'):
+            task['soft_subtitle_video'] = task['files']['new_soft_subtitle']
+
+        if task.get('files', {}).get('new_hard_subtitle'):
+            task['hard_subtitle_video'] = task['files']['new_hard_subtitle']
+
+        # 记录状态
+        if task['status'] == 'completed':
+            logger.info(f"   [状态查询] 任务已完成，files字段内容:")
+            for key, value in task['files'].items():
+                if value:
+                    logger.info(f"      {key}: {value}")
+                else:
+                    logger.info(f"      {key}: None")
+
         return jsonify(task)
 
 
 @app.route('/api/subtitle-generate/download/<task_id>/<type>', methods=['GET'])
 def subtitle_generate_download(task_id, type):
     """
-    下载生成的视频
+    下载生成的文件（支持多种类型）
 
     Args:
         task_id: 任务ID
-        type: 类型 (soft, hard)
+        type: 文件类型
+            - no_subtitle: 不带字幕视频
+            - soft: 新字幕软字幕视频
+            - hard: 新字幕硬字幕视频
+            - original_soft: 原字幕软字幕视频
+            - original_hard: 原字幕硬字幕视频
+            - merged_audio: 合并的配音音频
+            - mixed_audio: 伴奏混合音频
+            - vocals: 人声
+            - no_vocals: 伴奏
     """
     with subtitle_tasks_lock:
         task = subtitle_tasks.get(task_id)
@@ -583,15 +871,23 @@ def subtitle_generate_download(task_id, type):
             return jsonify({'error': '任务未完成'}), 400
 
     try:
-        if type == 'soft':
-            file_path = task.get('soft_subtitle_video')
-        elif type == 'hard':
-            file_path = task.get('hard_subtitle_video')
-        else:
-            return jsonify({'error': '无效的类型'}), 400
+        # 文件类型映射
+        file_mapping = {
+            'no_subtitle': task.get('files', {}).get('no_subtitle'),
+            'soft': task.get('files', {}).get('new_soft_subtitle'),
+            'hard': task.get('files', {}).get('new_hard_subtitle'),
+            'original_soft': task.get('files', {}).get('original_soft_subtitle'),
+            'original_hard': task.get('files', {}).get('original_hard_subtitle'),
+            'merged_audio': task.get('files', {}).get('merged_audio'),
+            'mixed_audio': task.get('files', {}).get('mixed_audio'),
+            'vocals': task.get('files', {}).get('vocals'),
+            'no_vocals': task.get('files', {}).get('no_vocals')
+        }
+
+        file_path = file_mapping.get(type)
 
         if not file_path or not os.path.exists(file_path):
-            return jsonify({'error': '文件不存在'}), 404
+            return jsonify({'error': f'文件不存在: {type}'}), 404
 
         filename = os.path.basename(file_path)
         return send_file(file_path, as_attachment=True, download_name=filename)
@@ -1096,6 +1392,24 @@ def audio_mix_upload():
         logger.info(f"跳过人声分离: {skip_separation}")
         logger.info(f"配音音频数量: {len(os.listdir(dubbing_audio_dir)) if os.path.exists(dubbing_audio_dir) else 0}")
 
+        # 初始化步骤列表
+        steps = [
+            {'id': 1, 'name': '提取原视频音轨', 'status': 'pending', 'message': '等待开始...'},
+            {'id': 2, 'name': 'AI分离人声和伴奏', 'status': 'pending', 'message': '等待开始...'},
+            {'id': 3, 'name': '合并配音音轨', 'status': 'pending', 'message': '等待开始...'},
+            {'id': 4, 'name': '混合人声和配音', 'status': 'pending', 'message': '等待开始...'},
+            {'id': 5, 'name': '生成最终音轨', 'status': 'pending', 'message': '等待开始...'}
+        ]
+
+        # 如果跳过分离，调整步骤列表
+        if skip_separation:
+            steps = [
+                {'id': 1, 'name': '使用提供的人声和伴奏', 'status': 'pending', 'message': '等待开始...'},
+                {'id': 2, 'name': '合并配音音轨', 'status': 'pending', 'message': '等待开始...'},
+                {'id': 3, 'name': '混合人声和配音', 'status': 'pending', 'message': '等待开始...'},
+                {'id': 4, 'name': '生成最终音轨', 'status': 'pending', 'message': '等待开始...'}
+            ]
+
         # 初始化任务
         with audio_mix_tasks_lock:
             audio_mix_tasks[task_id] = {
@@ -1115,7 +1429,9 @@ def audio_mix_upload():
                 'separated_accompaniment': None,
                 'merged_dubbing': None,
                 'final_audio': None,
-                'error': None
+                'error': None,
+                'steps': steps,
+                'current_step': 0
             }
 
         # 在后台线程中处理
@@ -1146,24 +1462,33 @@ def process_audio_mix_task(task_id, video_path, srt_path, output_dir, vocals_pat
     try:
         logger.info(f"🎬 开始处理音轨合成任务 {task_id}")
 
-        # 步骤1: 分离人声和伴奏（如果需要）
+        # 步骤1: 提取原视频音轨并分离人声伴奏（如果需要）
         if not skip_separation:
-            logger.info(f"📝 步骤1/4: 使用demucs分离人声和伴奏")
-            update_audio_mix_task_status(task_id, 10, '正在分离人声和伴奏...')
+            # 步骤1.1: 提取音频
+            logger.info(f"📝 步骤1/5: 提取原视频音轨")
+            update_audio_mix_step_status(task_id, 1, 'processing', '正在从视频提取音频...')
+            update_audio_mix_task_status(task_id, 5, '正在提取音轨...')
 
-            # 提取音频
             temp_audio = os.path.join(output_dir, 'temp_audio.wav')
             success = extract_audio_for_demucs(video_path, temp_audio)
             if not success:
+                update_audio_mix_step_status(task_id, 1, 'failed', '音频提取失败')
                 with audio_mix_tasks_lock:
                     audio_mix_tasks[task_id]['status'] = 'failed'
                     audio_mix_tasks[task_id]['error'] = '音频提取失败'
                 return
 
-            # 使用demucs分离
+            update_audio_mix_step_status(task_id, 1, 'completed', '音轨提取完成')
+
+            # 步骤1.2: AI分离人声和伴奏
+            logger.info(f"📝 步骤2/5: 使用Demucs AI分离人声和伴奏")
+            update_audio_mix_step_status(task_id, 2, 'processing', '正在使用Demucs AI模型分离人声和伴奏（这可能需要几分钟）...')
+            update_audio_mix_task_status(task_id, 10, '正在AI分离人声和伴奏...')
+
             demucs_output = os.path.join(output_dir, 'demucs_output')
             success = separate_vocals_accompaniment(temp_audio, demucs_output)
             if not success:
+                update_audio_mix_step_status(task_id, 2, 'failed', 'AI分离失败')
                 with audio_mix_tasks_lock:
                     audio_mix_tasks[task_id]['status'] = 'failed'
                     audio_mix_tasks[task_id]['error'] = '人声分离失败'
@@ -1175,18 +1500,26 @@ def process_audio_mix_task(task_id, video_path, srt_path, output_dir, vocals_pat
             with audio_mix_tasks_lock:
                 audio_mix_tasks[task_id]['separated_vocals'] = vocals_path
                 audio_mix_tasks[task_id]['separated_accompaniment'] = accompaniment_path
-        else:
-            logger.info(f"📝 步骤1/4: 跳过人声分离（使用提供的文件）")
-            update_audio_mix_task_status(task_id, 25, '使用提供的人声和伴奏文件')
 
-        # 步骤2: 解析字幕并合并配音音轨
-        logger.info(f"📝 步骤2/4: 按字幕合并配音音轨")
-        update_audio_mix_task_status(task_id, 35, '正在合并配音音轨...')
+            update_audio_mix_step_status(task_id, 2, 'completed', '人声和伴奏分离完成')
+        else:
+            # 跳过分离步骤
+            logger.info(f"📝 步骤1/4: 跳过AI分离（使用提供的人声和伴奏文件）")
+            update_audio_mix_step_status(task_id, 1, 'processing', '使用提供的人声和伴奏文件')
+            update_audio_mix_task_status(task_id, 15, '使用提供的人声和伴奏文件')
+            update_audio_mix_step_status(task_id, 1, 'completed', '已加载提供的人声和伴奏文件')
+
+        # 步骤: 合并配音音轨
+        step_offset = 0 if skip_separation else 1
+        logger.info(f"📝 步骤{2 + step_offset}/5: 按字幕时间轴合并配音音轨")
+        update_audio_mix_step_status(task_id, 2 + step_offset, 'processing', '正在解析字幕并合并配音片段...')
+        update_audio_mix_task_status(task_id, 35 if not skip_separation else 40, '正在合并配音音轨...')
 
         merged_dubbing_path = os.path.join(output_dir, 'merged_dubbing.mp3')
         success = merge_dubbing_audios(srt_path, dubbing_audio_dir, merged_dubbing_path)
 
         if not success:
+            update_audio_mix_step_status(task_id, 2 + step_offset, 'failed', '配音音轨合并失败')
             with audio_mix_tasks_lock:
                 audio_mix_tasks[task_id]['status'] = 'failed'
                 audio_mix_tasks[task_id]['error'] = '配音音轨合并失败'
@@ -1195,43 +1528,81 @@ def process_audio_mix_task(task_id, video_path, srt_path, output_dir, vocals_pat
         with audio_mix_tasks_lock:
             audio_mix_tasks[task_id]['merged_dubbing'] = merged_dubbing_path
 
-        # 步骤3: 合并人声和配音
-        logger.info(f"📝 步骤3/4: 合并人声和配音音轨")
-        update_audio_mix_task_status(task_id, 60, '正在合并人声和配音...')
+        update_audio_mix_step_status(task_id, 2 + step_offset, 'completed', f'配音音轨合并完成')
+
+        # 步骤: 合并人声和配音
+        logger.info(f"📝 步骤{3 + step_offset}/5: 混合人声和配音音轨")
+        update_audio_mix_step_status(task_id, 3 + step_offset, 'processing', '正在混合人声和配音（人声30% + 配音70%）...')
+        update_audio_mix_task_status(task_id, 60, '正在混合人声和配音...')
 
         vocals_with_dubbing_path = os.path.join(output_dir, 'vocals_with_dubbing.mp3')
         success = mix_two_audios(vocals_path, merged_dubbing_path, vocals_with_dubbing_path, vocals_ratio=0.3, dubbing_ratio=0.7)
 
         if not success:
+            update_audio_mix_step_status(task_id, 3 + step_offset, 'failed', '人声配音混合失败')
             with audio_mix_tasks_lock:
                 audio_mix_tasks[task_id]['status'] = 'failed'
                 audio_mix_tasks[task_id]['error'] = '人声配音混合失败'
             return
 
-        # 步骤4: 混合伴奏和人声配音
-        logger.info(f"📝 步骤4/4: 混合伴奏和人声配音")
+        update_audio_mix_step_status(task_id, 3 + step_offset, 'completed', '人声和配音混合完成')
+
+        # 步骤: 混合伴奏和人声配音
+        logger.info(f"📝 步骤{4 + step_offset}/5: 混合伴奏和人声配音生成最终音轨")
+        update_audio_mix_step_status(task_id, 4 + step_offset, 'processing', '正在混合伴奏和人声配音（伴奏70% + 人声配音30%）...')
         update_audio_mix_task_status(task_id, 80, '正在生成最终音轨...')
 
         final_audio_path = os.path.join(output_dir, 'final_audio.mp3')
         success = mix_two_audios(accompaniment_path, vocals_with_dubbing_path, final_audio_path, vocals_ratio=0.7, dubbing_ratio=0.3)
 
         if not success:
+            update_audio_mix_step_status(task_id, 4 + step_offset, 'failed', '最终音轨混合失败')
             with audio_mix_tasks_lock:
                 audio_mix_tasks[task_id]['status'] = 'failed'
                 audio_mix_tasks[task_id]['error'] = '最终音轨混合失败'
             return
 
+        update_audio_mix_step_status(task_id, 4 + step_offset, 'completed', '最终音轨生成完成')
+
+        # 清理临时文件，只保留需要的文件
+        logger.info(f"🗑️  清理临时文件...")
+        keep_files = {
+            'vocals.wav',           # 人声
+            'no_vocals.wav',        # 伴奏
+            'final_audio.mp3',      # 最终音轨
+            'merged_dubbing.mp3',   # 合并的配音
+            'vocals_with_dubbing.mp3'  # 人声+配音混合
+        }
+
+        files_to_delete = []
+        for file in os.listdir(output_dir):
+            if file not in keep_files:
+                file_path = os.path.join(output_dir, file)
+                if os.path.isfile(file_path):
+                    files_to_delete.append(file_path)
+
+        # 删除临时文件
+        for file_path in files_to_delete:
+            try:
+                os.remove(file_path)
+                logger.info(f"   ✅ 已删除: {os.path.basename(file_path)}")
+            except Exception as e:
+                logger.warning(f"   ⚠️  删除失败 {os.path.basename(file_path)}: {e}")
+
+        logger.info(f"   📦 保留文件: {sorted(keep_files)}")
+
         # 任务完成
         with audio_mix_tasks_lock:
             audio_mix_tasks[task_id]['status'] = 'completed'
             audio_mix_tasks[task_id]['progress'] = 100
-            audio_mix_tasks[task_id]['message'] = '处理完成'
+            audio_mix_tasks[task_id]['message'] = '音轨合成完成'
             audio_mix_tasks[task_id]['final_audio'] = final_audio_path
             audio_mix_tasks[task_id]['completed_at'] = datetime.now().isoformat()
 
         logger.info(f"✅ 音轨合成任务 {task_id} 处理成功")
         logger.info(f"   最终音轨: {final_audio_path}")
         logger.info(f"   💾 保存位置: {output_dir}")
+        logger.info(f"   📊 保留文件数: {len(keep_files)}")
         logger.info("=" * 60)
 
     except Exception as e:
@@ -1286,8 +1657,12 @@ def separate_vocals_accompaniment(audio_path: str, output_dir: str) -> bool:
         logger.info(f"   📊 Demucs使用AI模型处理，通常需要2-5分钟...")
         logger.info(f"   ⏱️  请耐心等待，处理时间取决于音频长度...")
 
+        # 获取当前Python解释器路径，使用venv中的Python
+        import sys
+        python_exe = sys.executable
+
         cmd = [
-            'demucs',
+            python_exe, '-m', 'demucs',
             '-n', 'htdemucs',
             '--out', output_dir,
             audio_path
@@ -1296,6 +1671,9 @@ def separate_vocals_accompaniment(audio_path: str, output_dir: str) -> bool:
         # 使用Popen来获取实时输出
         import time
         start_time = time.time()
+
+        logger.info(f"   🔧 执行命令: {' '.join(cmd)}")
+
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -1311,6 +1689,11 @@ def separate_vocals_accompaniment(audio_path: str, output_dir: str) -> bool:
                 current_time = time.time()
                 elapsed = int(current_time - start_time)
 
+                # 记录所有输出（帮助调试）
+                line_stripped = line.strip()
+                if line_stripped:
+                    logger.info(f"   [Demucs] {line_stripped}")
+
                 # 每30秒输出一次进度信息
                 if current_time - last_log_time >= 30:
                     logger.info(f"   ⏳  Demucs正在处理... 已运行 {elapsed} 秒")
@@ -1322,24 +1705,136 @@ def separate_vocals_accompaniment(audio_path: str, output_dir: str) -> bool:
         if return_code == 0:
             logger.info(f"   ✅ Demucs处理完成，用时 {int(time.time() - start_time)} 秒")
 
-            # demucs会创建一个子目录，格式为: output_dir/音频文件名/vocals.wav
-            audio_name = Path(audio_path).stem
-            demucs_output = os.path.join(output_dir, audio_name, 'vocals.wav')
+            # demucs使用htdemucs模型时，创建的子目录格式为: output_dir/htdemucs/完整文件名/vocals.wav
+            # 注意：demucs保留完整的文件名（包括扩展名）作为子目录名
+            audio_name_with_ext = os.path.basename(audio_path)  # temp_audio.wav
+            audio_name_no_ext = Path(audio_path).stem  # temp_audio
 
-            if os.path.exists(demucs_output):
-                # 重命名文件到目标目录
-                src_dir = os.path.join(output_dir, audio_name)
+            # 先列出实际的目录结构进行调试
+            logger.info(f"   🔍 正在扫描输出目录: {output_dir}")
+            for root, dirs, files in os.walk(output_dir):
+                logger.info(f"   📁 {root}")
+                if files:
+                    logger.info(f"      文件: {files}")
+
+            # 首先检查 htdemucs 目录下是否有 vocals.wav（demucs 可能直接输出到模型目录）
+            htdemucs_dir = os.path.join(output_dir, 'htdemucs')
+            src_dir = None
+
+            if os.path.exists(htdemucs_dir):
+                htdemucs_files = os.listdir(htdemucs_dir)
+                logger.info(f"   📂 htdemucs 目录内容: {htdemucs_files}")
+
+                # 查找 vocals.wav
+                if 'vocals.wav' in htdemucs_files:
+                    src_dir = htdemucs_dir
+                    logger.info(f"   ✅ 找到 vocals.wav 在 htdemucs 目录")
+                else:
+                    # 如果没有 vocals.wav，检查是否有子目录
+                    for item in htdemucs_files:
+                        item_path = os.path.join(htdemucs_dir, item)
+                        if os.path.isdir(item_path):
+                            item_files = os.listdir(item_path)
+                            logger.info(f"   📂 子目录 {item} 内容: {item_files}")
+                            if 'vocals.wav' in item_files:
+                                src_dir = item_path
+                                logger.info(f"   ✅ 找到 vocals.wav 在 {item} 子目录")
+                                break
+
+            # 如果在 htdemucs 目录没找到，尝试其他可能的路径
+            if not src_dir:
+                # 尝试多个可能的路径（优先检查完整文件名）
+                possible_paths = [
+                    # htdemucs 模型 + 完整文件名
+                    os.path.join(output_dir, 'htdemucs', audio_name_with_ext, 'vocals.wav'),
+                    # htdemucs 模型 + 无扩展名
+                    os.path.join(output_dir, 'htdemucs', audio_name_no_ext, 'vocals.wav'),
+                    # 默认模型 + 完整文件名
+                    os.path.join(output_dir, audio_name_with_ext, 'vocals.wav'),
+                    # 默认模型 + 无扩展名
+                    os.path.join(output_dir, audio_name_no_ext, 'vocals.wav'),
+                ]
+
+                logger.info(f"   🔍 检查子目录路径:")
+                for path in possible_paths:
+                    exists = os.path.exists(path)
+                    logger.info(f"     {exists} - {path}")
+                    if exists:
+                        src_dir = os.path.dirname(path)
+                        break
+
+            if src_dir and os.path.exists(src_dir):
+                logger.info(f"   📂 找到输出目录: {src_dir}")
+
+                # 移动文件到目标目录
                 for file in os.listdir(src_dir):
                     src_file = os.path.join(src_dir, file)
                     dst_file = os.path.join(output_dir, file)
                     if os.path.exists(dst_file):
                         os.remove(dst_file)
                     shutil.move(src_file, dst_file)
+                    logger.info(f"   ✅ 已移动: {file}")
+
+                # 检查是否有 no_vocals.wav，如果没有则从 drums + bass + other 混合生成
+                no_vocals_path = os.path.join(output_dir, 'no_vocals.wav')
+                if not os.path.exists(no_vocals_path):
+                    logger.info(f"   🎵 正在混合伴奏 (drums + bass + other)...")
+
+                    drums_path = os.path.join(output_dir, 'drums.wav')
+                    bass_path = os.path.join(output_dir, 'bass.wav')
+                    other_path = os.path.join(output_dir, 'other.wav')
+
+                    if all(os.path.exists(p) for p in [drums_path, bass_path, other_path]):
+                        # 使用 ffmpeg 混合三个音轨
+                        cmd = [
+                            'ffmpeg', '-y',
+                            '-i', drums_path,
+                            '-i', bass_path,
+                            '-i', other_path,
+                            '-filter_complex', '[0:a][1:a][2:a]amix=inputs=3:duration=longest',
+                            '-loglevel', 'error',
+                            no_vocals_path
+                        ]
+
+                        result = subprocess.run(cmd, capture_output=True, text=True)
+                        if result.returncode == 0:
+                            logger.info(f"   ✅ 伴奏生成成功: no_vocals.wav")
+                        else:
+                            logger.error(f"   ❌ 伴奏生成失败: {result.stderr}")
+                            return False
+                    else:
+                        logger.error(f"   ❌ 缺少必要的音轨文件")
+                        logger.error(f"      drums: {os.path.exists(drums_path)}")
+                        logger.error(f"      bass: {os.path.exists(bass_path)}")
+                        logger.error(f"      other: {os.path.exists(other_path)}")
+                        return False
+
+                # 清理空的子目录
+                try:
+                    htdemucs_dir = os.path.join(output_dir, 'htdemucs')
+                    if os.path.exists(htdemucs_dir):
+                        shutil.rmtree(htdemucs_dir)
+                        logger.info(f"   🗑️  已清理临时目录")
+                except:
+                    pass
 
                 logger.info(f"   ✅ 人声分离成功")
                 return True
             else:
-                logger.error(f"   ❌ 分离输出文件不存在: {demucs_output}")
+                logger.error(f"   ❌ 分离输出文件不存在")
+                logger.error(f"   尝试的路径:")
+                for path in possible_paths:
+                    logger.error(f"     - {path}")
+                # 列出实际创建的目录结构
+                if os.path.exists(output_dir):
+                    logger.error(f"   实际目录结构:")
+                    for root, dirs, files in os.walk(output_dir):
+                        level = root.replace(output_dir, '').count(os.sep)
+                        indent = ' ' * 2 * (level + 1)
+                        logger.error(f"{indent}{os.path.basename(root)}/")
+                        subindent = ' ' * 2 * (level + 2)
+                        for file in files:
+                            logger.error(f"{subindent}{file}")
                 return False
         else:
             logger.error(f"   ❌ demucs执行失败，返回码: {return_code}")
@@ -1476,6 +1971,34 @@ def update_audio_mix_task_status(task_id, progress, message):
         if task_id in audio_mix_tasks:
             audio_mix_tasks[task_id]['progress'] = progress
             audio_mix_tasks[task_id]['message'] = message
+
+
+def update_audio_mix_step_status(task_id, step_id, status, message=None):
+    """
+    更新音轨合成任务的步骤状态
+
+    Args:
+        task_id: 任务ID
+        step_id: 步骤ID（从1开始）
+        status: 步骤状态 (pending, processing, completed, failed)
+        message: 步骤详细信息（可选）
+    """
+    with audio_mix_tasks_lock:
+        if task_id in audio_mix_tasks:
+            task = audio_mix_tasks[task_id]
+            steps = task.get('steps', [])
+
+            # 查找对应的步骤
+            for step in steps:
+                if step['id'] == step_id:
+                    step['status'] = status
+                    if message:
+                        step['message'] = message
+                    break
+
+            # 更新当前步骤
+            if status == 'processing':
+                task['current_step'] = step_id
 
 
 @app.route('/api/audio-mix/status/<task_id>', methods=['GET'])
